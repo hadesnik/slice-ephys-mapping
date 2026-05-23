@@ -35,3 +35,6 @@ sessions/
 
 # Local config
 *.local.json
+
+# Multi-agent round worktrees (live alongside the main checkout, gitignored)
+.worktrees/
