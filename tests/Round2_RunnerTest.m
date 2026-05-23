@@ -255,6 +255,90 @@ classdef Round2_RunnerTest < matlab.unittest.TestCase
             testCase.verifyEmpty(ts, "Runner ITI timers leaked past stop().");
         end
 
+        function testUpdateConfigOnIdleAffectsNextStart(testCase)
+            [runner, ~, ~] = testCase.makeRunner( ...
+                'trialLengthSec', 0.35, ...
+                'itiSec',         0.05, ...
+                'sealTest', struct('amplitudeVcMv', -5, 'amplitudeIcPa', -100, ...
+                                   'preMs', 10, 'stepMs', 20, 'postMs', 10));
+
+            newCfg = patchclamp.config.TrialConfig.defaultConfig();
+            newCfg.trialLengthSec = 0.5;
+            newCfg.itiSec         = 0.05;
+            newCfg.sealTest = struct('amplitudeVcMv', -5, 'amplitudeIcPa', -100, ...
+                                     'preMs', 10, 'stepMs', 20, 'postMs', 10);
+
+            runner.updateConfig(newCfg);
+            runner.start();
+
+            testCase.waitFor(@() runner.trialCount >= uint32(1), 5.0);
+            tr = runner.lastTrialResult;
+
+            % The longer trial length must show up in the AI sample count.
+            testCase.verifyEqual(numel(tr.aiCellUnits), newCfg.sampleRateHz * 0.5, ...
+                "Next trial after updateConfig must use the new trialLengthSec.");
+
+            runner.stop();
+        end
+
+        function testUpdateConfigBetweenTrialsTakesEffectOnNext(testCase)
+            % Start with one config, swap config from a TrialFinished
+            % listener (i.e. between trials), and verify the next trial
+            % reflects the new config.
+            [runner, ~, ~] = testCase.makeRunner( ...
+                'trialLengthSec', 0.35, ...
+                'itiSec',         0.05, ...
+                'sealTest', struct('amplitudeVcMv', -5, 'amplitudeIcPa', -100, ...
+                                   'preMs', 10, 'stepMs', 20, 'postMs', 10));
+
+            newLen = 0.55;
+            swapped = false;
+            lh = addlistener(runner, 'TrialFinished', @(~,~) onFinished());
+            cleanup = onCleanup(@() delete(lh)); %#ok<NASGU>
+            function onFinished()
+                if swapped
+                    return;
+                end
+                cfg2 = patchclamp.config.TrialConfig.defaultConfig();
+                cfg2.trialLengthSec = newLen;
+                cfg2.itiSec         = 0.05;
+                cfg2.sealTest = struct('amplitudeVcMv', -5, 'amplitudeIcPa', -100, ...
+                                       'preMs', 10, 'stepMs', 20, 'postMs', 10);
+                runner.updateConfig(cfg2);
+                swapped = true;
+            end
+
+            runner.start();
+            % Wait for at least 2 trials so we see one trial under the new config.
+            testCase.waitFor(@() runner.trialCount >= uint32(2), 5.0);
+            runner.stop();
+
+            tr = runner.lastTrialResult;
+            testCase.verifyEqual(numel(tr.aiCellUnits), tr.sampleRateHz * newLen, ...
+                "Trial after updateConfig must use the new trialLengthSec.");
+        end
+
+        function testUpdateConfigRejectsInvalidAndKeepsOldConfig(testCase)
+            [runner, ~, ~] = testCase.makeRunner( ...
+                'trialLengthSec', 0.35, ...
+                'itiSec',         0.05, ...
+                'sealTest', struct('amplitudeVcMv', -5, 'amplitudeIcPa', -100, ...
+                                   'preMs', 10, 'stepMs', 20, 'postMs', 10));
+
+            bad = patchclamp.config.TrialConfig.defaultConfig();
+            bad.sampleRateHz = -1;   % violates mustBePositive
+
+            testCase.verifyError(@() runner.updateConfig(bad), ?MException);
+
+            % Still able to run with the original config.
+            runner.start();
+            testCase.waitFor(@() runner.trialCount >= uint32(1), 5.0);
+            tr = runner.lastTrialResult;
+            testCase.verifyEqual(numel(tr.aiCellUnits), 20000 * 0.35, ...
+                "Original config must remain in effect after a rejected updateConfig.");
+            runner.stop();
+        end
+
     end
 
     methods (Access = private)
