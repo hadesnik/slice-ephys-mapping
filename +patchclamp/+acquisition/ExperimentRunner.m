@@ -79,6 +79,19 @@ classdef ExperimentRunner < handle
             obj.runOneTrial();
         end
 
+        function updateConfig(obj, newConfig)
+            % Validates newConfig (call TrialConfig.validate), then atomically
+            % swaps obj.Config. The next runOneTrial picks up the new config.
+            % The currently in-flight trial (if any) finishes with the old
+            % config.
+            arguments
+                obj
+                newConfig (1,1) struct
+            end
+            patchclamp.config.TrialConfig.validate(newConfig);
+            obj.Config = newConfig;
+        end
+
         function stop(obj)
             if obj.state == "Idle"
                 return;
