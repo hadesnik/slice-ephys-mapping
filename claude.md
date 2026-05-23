@@ -23,6 +23,8 @@ The repo owner is the researcher building the rig. The *end* users are novice el
 ## Platform notes
 
 - Development happens on macOS. The rig PC is Windows.
+- **Rig PC: MATLAB R2024 (a or b) with a full toolbox license** (confirmed by Hillel). Data Acquisition Toolbox is available — assume it for R4.
+- **Dev Mac: MATLAB R2023a/b/R2025b installed; macOS 12.7.6 means R2025b will not launch (Qt requires 13.3+)**. Tests on the Mac run under R2023a. The baseline of "R2023a+" in architecture.md §4 is correct.
 - MATLAB's Data Acquisition Toolbox NI support and the MultiClamp Commander DLL are Windows-only. All code must run on macOS via `FakeBackend` + `FakeTelegraph`.
 - Any code path that needs the MCC DLL or NI hardware must be gated by `ispc()` and must not error at file-load time on a Mac.
 
