@@ -29,7 +29,11 @@ classdef OptoEditorPanel < handle
     end
 
     events
+        % ConfigChanged is the legacy broadcast (kept for backwards compat).
+        % OptoUpdated is the spec event for Round 3a Agent H: parent app
+        % subscribes and pulls the latest struct via currentConfig().
         ConfigChanged
+        OptoUpdated
     end
 
     methods
@@ -108,7 +112,11 @@ classdef OptoEditorPanel < handle
             % Row 7: preview axes
             obj.previewAxes = uiaxes(grid, 'Tag', 'previewAxes');
             obj.previewAxes.Layout.Row = 7; obj.previewAxes.Layout.Column = [1 2];
-            title(obj.previewAxes, 'Preview');
+            % Simpler than dual-axis ticks (Q7): show % on the Y axis and the
+            % full-scale volts equivalent in the title, so the user can sanity-
+            % check what the LED driver actually sees.
+            ledMaxV = patchclamp.hardware.LedDriver.MAX_VOLTS;
+            title(obj.previewAxes, sprintf('Preview (100%% = %.1f V at LED driver)', ledMaxV));
             xlabel(obj.previewAxes, 'Time (ms)');
             ylabel(obj.previewAxes, 'Brightness (%)');
 
@@ -123,6 +131,12 @@ classdef OptoEditorPanel < handle
             obj.stimulusWindowSec = windowSec;
             obj.renderPreview();
         end
+
+        function cfg = currentConfig(obj)
+            % Returns the last successfully-validated PulseTrainConfig struct
+            % (units = "percent" for the LED amplitude).
+            cfg = obj.Config;
+        end
     end
 
     methods (Access = private)
@@ -136,6 +150,7 @@ classdef OptoEditorPanel < handle
                 patchclamp.hardware.LedDriver.brightnessPercentToVolts(candidate.amplitude);
             catch ME
                 obj.statusLabel.Text = ME.message;
+                obj.showAlert(ME.message);
                 return;
             end
 
@@ -143,6 +158,17 @@ classdef OptoEditorPanel < handle
             obj.Config = candidate;
             obj.renderPreview();
             notify(obj, 'ConfigChanged');
+            notify(obj, 'OptoUpdated');
+        end
+
+        function showAlert(obj, msg)
+            f = ancestor(obj.Panel, 'figure');
+            if ~isempty(f) && isvalid(f) && isa(f, 'matlab.ui.Figure')
+                try
+                    uialert(f, char(msg), 'Invalid opto pulse train');
+                catch
+                end
+            end
         end
 
         function onClear(obj)
@@ -161,6 +187,7 @@ classdef OptoEditorPanel < handle
             obj.statusLabel.Text = '';
             cla(obj.previewAxes);
             notify(obj, 'ConfigChanged');
+            notify(obj, 'OptoUpdated');
         end
 
         function s = readFields(obj)

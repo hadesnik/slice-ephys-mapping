@@ -32,7 +32,11 @@ classdef CommandEditorPanel < handle
     end
 
     events
+        % ConfigChanged is the legacy broadcast (kept for backwards compat).
+        % CommandUpdated is the spec event for Round 3a Agent H: parent app
+        % subscribes and pulls the latest struct via currentConfig().
         ConfigChanged
+        CommandUpdated
     end
 
     methods
@@ -131,6 +135,11 @@ classdef CommandEditorPanel < handle
             obj.stimulusWindowSec = windowSec;
             obj.renderPreview();
         end
+
+        function cfg = currentConfig(obj)
+            % Returns the last successfully-validated PulseTrainConfig struct.
+            cfg = obj.Config;
+        end
     end
 
     methods (Access = private, Static)
@@ -159,6 +168,7 @@ classdef CommandEditorPanel < handle
                 patchclamp.config.PulseTrainConfig.validateFitsWindow(candidate, obj.stimulusWindowSec);
             catch ME
                 obj.statusLabel.Text = ME.message;
+                obj.showAlert(ME.message);
                 return;
             end
 
@@ -166,6 +176,20 @@ classdef CommandEditorPanel < handle
             obj.Config = candidate;
             obj.renderPreview();
             notify(obj, 'ConfigChanged');
+            notify(obj, 'CommandUpdated');
+        end
+
+        function showAlert(obj, msg)
+            % uialert needs a uifigure ancestor; if there is none (panel built
+            % under a regular figure or detached parent), fall back silently to
+            % the inline statusLabel so we never throw from a UI callback.
+            f = ancestor(obj.Panel, 'figure');
+            if ~isempty(f) && isvalid(f) && isa(f, 'matlab.ui.Figure')
+                try
+                    uialert(f, char(msg), 'Invalid command pulse train');
+                catch
+                end
+            end
         end
 
         function onClear(obj)
@@ -180,6 +204,7 @@ classdef CommandEditorPanel < handle
             obj.statusLabel.Text = '';
             cla(obj.previewAxes);
             notify(obj, 'ConfigChanged');
+            notify(obj, 'CommandUpdated');
         end
 
         function s = readFields(obj)
