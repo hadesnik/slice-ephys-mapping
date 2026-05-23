@@ -3,20 +3,36 @@ classdef TrialPlotPanel < handle
     %
     % Owns a single uipanel containing one uiaxes. Each call to addTrial draws
     % a new line for the first 200 ms of the trace; older traces fade with age
-    % via the 4th element of the Line Color (RGBA). At most MaxOverlay lines
-    % are retained; older lines are deleted on overflow (decision A6: last 5).
+    % via a blended RGB color (R2023a Line.Color drops the alpha channel, so we
+    % blend toward the axes background and stash the true alpha in UserData).
+    % At most MaxOverlay lines are retained; older lines are deleted on
+    % overflow (decision A6: last 5).
     %
-    % The Y-axis label flips with mode: "Current (pA)" in VC, "Voltage (mV)"
-    % in IC. The X-axis is always Time (ms), 0..200.
+    % The Y-axis label flips with mode: "Im (pA)" in VC, "Vm (mV)" in IC. The
+    % X-axis is always Time (ms), 0..200.
+    %
+    % Mode-change handling: when a new trial arrives in a different mode from
+    % the previous one we clear the overlay. A mixed-mode overlay would be
+    % ambiguous because each mode uses a different Y unit; the cleaner option
+    % is to start fresh.
+    %
+    % Subscription to ExperimentRunner: attachRunner() addlistener's to the
+    % runner's TrialFinished event. That event carries no custom EventData
+    % (see ExperimentRunner.m), so onTrialFinished pulls the trial result off
+    % the runner via the event's Source handle.
 
     properties (SetAccess = private, GetAccess = public)
         Panel                                              % uipanel handle
         MaxOverlay  (1,1) uint32 = uint32(5)
     end
 
-    properties (Access = private)
+    properties (Hidden, Access = ?matlab.unittest.TestCase)
         Axes        matlab.ui.control.UIAxes
+    end
+
+    properties (Access = private)
         CurrentMode string = "VC"
+        RunnerListener  event.listener = event.listener.empty
     end
 
     methods
@@ -40,6 +56,55 @@ classdef TrialPlotPanel < handle
             hold(obj.Axes, 'on');
         end
 
+        function attachRunner(obj, runner)
+            % Subscribe to runner.TrialFinished. TrialFinished carries no
+            % custom EventData; we read runner.lastTrialResult on each fire.
+            arguments
+                obj
+                runner (1,1) handle
+            end
+            obj.detachRunner();
+            obj.RunnerListener = addlistener(runner, "TrialFinished", ...
+                @(s,e) obj.onTrialFinished(e));
+        end
+
+        function detachRunner(obj)
+            if ~isempty(obj.RunnerListener) && isvalid(obj.RunnerListener)
+                delete(obj.RunnerListener);
+            end
+            obj.RunnerListener = event.listener.empty;
+        end
+
+        function onTrialFinished(obj, eventData)
+            % Single callback used by attachRunner. The TrialFinished event
+            % from ExperimentRunner carries no custom payload, so we pull the
+            % trial result off eventData.Source.lastTrialResult.
+            arguments
+                obj
+                eventData
+            end
+            try
+                src = eventData.Source;
+                tr  = src.lastTrialResult;
+            catch
+                return;
+            end
+            if isempty(tr) || ~isstruct(tr) || ~isfield(tr, 'aiCellUnits')
+                return;
+            end
+
+            obj.addTrial(tr.aiCellUnits(:), double(tr.sampleRateHz), ...
+                string(tr.mode));
+        end
+
+        function reset(obj)
+            % Clear all overlay lines and reset cached mode. Used when the
+            % user starts a new session.
+            obj.clearOverlay();
+            obj.CurrentMode = "VC";
+            obj.applyYLabel();
+        end
+
         function addTrial(obj, aiCellUnits, sampleRateHz, mode)
             arguments
                 obj
@@ -48,6 +113,11 @@ classdef TrialPlotPanel < handle
                 mode          (1,1) string {mustBeMember(mode, ["VC","IC"])}
             end
 
+            % Mode flip clears the overlay: mixing units on one axes is
+            % visually misleading.
+            if mode ~= obj.CurrentMode && obj.lineCount() > 0
+                obj.clearOverlay();
+            end
             obj.CurrentMode = mode;
             obj.applyYLabel();
 
@@ -58,30 +128,22 @@ classdef TrialPlotPanel < handle
             yseg = aiCellUnits(1:nTake);
             t = (0:(nTake-1))' / sampleRateHz * 1000;  % ms
 
-            % Draw the new line with placeholder color; faded refresh below
-            % sets the final RGBA for every line consistently.
-            newLine = plot(obj.Axes, t, yseg, 'LineWidth', 1.0);
+            plot(obj.Axes, t, yseg, 'LineWidth', 1.0);
 
-            % Cap overlay count: oldest is at index 1 (children() returns
-            % newest-first in MATLAB, so we delete the last child).
+            % Cap overlay count: keep the most recent MaxOverlay lines.
             lines = obj.getLines();
             while numel(lines) > double(obj.MaxOverlay)
-                delete(lines(end));   % oldest in chronological order
+                delete(lines(1));   % oldest first in chronological order
                 lines = obj.getLines();
             end
 
             obj.refreshAlphas();
-            % Silence "unused" warning while keeping handle accessible for
-            % future debugging.
-            %#ok<NASGU>
-            newLine;
         end
 
         function clear(obj)
-            lines = obj.getLines();
-            for k = 1:numel(lines)
-                delete(lines(k));
-            end
+            % Backward-compatible alias for reset(); retained so existing
+            % callers and tests continue to work.
+            obj.clearOverlay();
         end
 
         function setMode(obj, mode)
@@ -92,14 +154,32 @@ classdef TrialPlotPanel < handle
             obj.CurrentMode = mode;
             obj.applyYLabel();
         end
+
+        function delete(obj)
+            try
+                obj.detachRunner();
+            catch
+            end
+        end
     end
 
     methods (Access = private)
         function applyYLabel(obj)
             if obj.CurrentMode == "VC"
-                ylabel(obj.Axes, 'Current (pA)');
+                ylabel(obj.Axes, 'Im (pA)');
             else
-                ylabel(obj.Axes, 'Voltage (mV)');
+                ylabel(obj.Axes, 'Vm (mV)');
+            end
+        end
+
+        function n = lineCount(obj)
+            n = numel(obj.getLines());
+        end
+
+        function clearOverlay(obj)
+            lines = obj.getLines();
+            for k = 1:numel(lines)
+                delete(lines(k));
             end
         end
 
