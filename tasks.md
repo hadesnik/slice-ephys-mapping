@@ -180,6 +180,131 @@ Round 0 (half day) → Round 1 (1–2 days parallel) → Round 2 (1 day) → Rou
 
 ---
 
+---
+
+## Auto-mode decisions (locked in by the orchestrator, override anytime)
+
+| #  | Decision                                                                              |
+|----|---------------------------------------------------------------------------------------|
+| A1 | DAQ channels: `AI1` = 700B scaled output, `AO0` = 700B EXT COMMAND, `AO2` = LED.       |
+| A2 | AI range ±10 V, AO range ±10 V.                                                       |
+| A3 | Seal test is **additive**: DAQ sits at 0 V except during the test step. Holding command stays on the 700B front panel. |
+| A4 | ITI = silent gap between end of one trial's acquisition and start of next trial's output. |
+| A5 | Mode latched at trial start. Mid-trial mode flip applies to the next trial. Stop = finish current trial, then idle. |
+| A6 | Trial-plot overlay: last 5 trials, alpha-faded with age.                              |
+| A7 | Scaled-output is assumed = Im (in VC) / Vm (in IC). Telegraph reports actual setting; mismatch is a startup error. |
+| A8 | Data dir: `~/Documents/PatchData/YYYY-MM-DD/<cellId>_<HHMMSS>.h5`. Prompted on first run, remembered in user prefs. |
+| A9 | Filter setting: recorded from telegraph per trial, not controlled.                    |
+
+---
+
+## Orchestration playbook
+
+This is how the orchestrator (the top-level Claude session) runs the rounds. It's prescriptive on purpose — the multi-agent design only works if everyone respects the same gate protocol.
+
+### Worktree convention
+
+Parallel agents in the same round use isolated worktrees:
+
+```
+<repo>/.worktrees/r1-agentA/     branch: round1/agent-a-fakes
+<repo>/.worktrees/r1-agentB/     branch: round1/agent-b-protocol
+<repo>/.worktrees/r1-agentC/     branch: round1/agent-c-analysis
+<repo>/.worktrees/r1-agentD/     branch: round1/agent-d-storage
+```
+
+The orchestrator merges them into `main` in order A → B → C → D, running `runtests('tests')` after each merge. If any merge conflicts (it shouldn't, given file ownership), the orchestrator stops and asks.
+
+Serial rounds (R0, R2, R3b) work directly on `main`.
+
+### Prompt template for an agent
+
+Each agent prompt has these sections, in this order:
+
+```
+ROLE: You are <Agent X> of <Round N> of a multi-round MATLAB project.
+
+REPO: /Users/hillel/Dropbox/Vibe Code/new whole-cell patch software
+WORKTREE: <path or "main">
+BRANCH: <branch name>
+
+READ FIRST (in this order, fully):
+  1. architecture.md
+  2. claude.md
+  3. tasks.md  (focus on Round <N>, file-ownership matrix, and "Auto-mode decisions")
+
+YOU OWN exactly these files. Create or modify ONLY these:
+  - <path 1>
+  - <path 2>
+  - ...
+Touching any other file is a contract violation. If you believe you need to,
+STOP and report it instead.
+
+GOAL: <one paragraph, no jargon>
+
+CONTRACTS YOU MUST RESPECT (do not change):
+  - <abstract class signatures from R0>
+  - <struct field names>
+  - <event names>
+
+DELIVERABLES:
+  - <file with one-line description>
+  - matlab.unittest test class covering the public surface
+  - All tests pass under `runtests('tests')` on macOS
+
+EXIT CRITERIA:
+  - All listed files exist
+  - `runtests('tests')` is green
+  - No edits outside the owned-files list
+  - No new external dependencies beyond what architecture.md §4 lists
+
+REPORT (under 200 words):
+  - One line per file with what's in it
+  - Test counts (passed/failed)
+  - Any contract ambiguities you hit and how you resolved them
+```
+
+### Gate procedure between rounds
+
+After every round, the orchestrator runs:
+
+1. `git status` — clean? Untracked files only where expected?
+2. `runtests('tests')` on macOS — all green?
+3. For R1 onward: diff against the previous "Contracts vN" tag — no changes to frozen files? (R0 outputs are tagged `contracts-v1`.)
+4. Manually skim each new file for: forbidden patterns (`global`, `evalin('base',...)`, `.mlapp`, hard-coded gain numbers).
+5. Commit with message `Round N complete: <one-line summary>`, tag if appropriate.
+
+If any step fails, the orchestrator stops, reports, and asks before retrying.
+
+### What the orchestrator never does
+
+- Modify files owned by an in-flight agent's round.
+- Skip the gate procedure to "save time."
+- Change a frozen contract without a documented decision (a new row in `Decisions — resolved` or `Auto-mode decisions`).
+- Use destructive git operations (`reset --hard`, force push) without asking.
+
+### Agent launches — round by round
+
+| Round | Agents (count) | Concurrency | Worktrees? | Orchestrator action between |
+|-------|----------------|-------------|------------|-----------------------------|
+| R0    | 1              | serial      | no         | tag `contracts-v1`          |
+| R1    | 4 (A, B, C, D) | parallel    | yes        | merge A→B→C→D, tests after each |
+| R2    | 1              | serial      | no         | tag `runner-v1`             |
+| R3a   | 3 (F, G, H)    | parallel    | yes        | merge F→G→H                 |
+| R3b   | 1 (I)          | serial      | no         | tag `gui-v1`                |
+| R4    | 1              | serial      | no, **on rig PC** | tag `hw-v1`           |
+| R5    | 1              | serial      | no         | tag `v1.0`                  |
+
+### When to pause and ask the user
+
+The orchestrator pauses (not in auto mode) or surfaces a decision (in auto mode) when:
+- An agent reports a contract ambiguity it couldn't resolve.
+- Tests fail after a merge.
+- A round's scope appears wrong given new information (e.g. R1 Agent C discovers Rs computation needs data Agent A doesn't synthesize).
+- A frozen contract would need to change.
+
+---
+
 ## Deferred (post-v1)
 
 - Arbitrary waveform stimuli (continuous functions, mentioned in spec §9).
