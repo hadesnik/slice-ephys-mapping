@@ -178,6 +178,54 @@ classdef Round3_MainWindowTest < matlab.unittest.TestCase
             w.shutdown();
         end
 
+        function testEndToEndWritesHdf5OnDisk(testCase)
+            % R3 exit criterion: click Start, accumulate trials, click Stop,
+            % find a valid HDF5 file on disk with the expected trial groups.
+            tmpDir = tempname;
+            mkdir(tmpDir);
+            cleanupTmp = onCleanup(@() rmdir(tmpDir, 's'));  %#ok<NASGU>
+            filePath = fullfile(tmpDir, "session.h5");
+
+            telegraph = patchclamp.hardware.FakeTelegraph();
+            backend   = patchclamp.hardware.FakeBackend(telegraph);
+            backend.rngSeed = 1;
+            cfg = patchclamp.config.TrialConfig.defaultConfig();
+            cfg.trialLengthSec = 0.35;
+            cfg.itiSec         = 0.05;
+            cfg.sealTest.preMs  = 10;
+            cfg.sealTest.stepMs = 20;
+            cfg.sealTest.postMs = 10;
+            writer = patchclamp.storage.Hdf5Writer(string(filePath), ...
+                struct("cellId", "testcell", "config", cfg));
+
+            w = patchclamp.gui.MainWindow( ...
+                Daq=backend, Telegraph=telegraph, Writer=writer, Config=cfg, ...
+                Visible="off");
+            testCase.Window = w;
+
+            w.ControlsPanel.StartButton.ButtonPushedFcn( ...
+                w.ControlsPanel.StartButton, struct());
+
+            testCase.waitFor(@() w.Runner.trialCount >= uint32(3), 10.0);
+
+            w.ControlsPanel.StopButton.ButtonPushedFcn( ...
+                w.ControlsPanel.StopButton, struct());
+            testCase.waitFor(@() w.Runner.state == "Idle", 5.0);
+
+            % Shut down the window so the writer is closed before we
+            % inspect the file with h5info.
+            w.shutdown();
+            testCase.Window = [];
+
+            testCase.verifyTrue(exist(filePath, 'file') == 2, ...
+                "Expected HDF5 file on disk after end-to-end run.");
+
+            info = h5info(filePath, '/trials');
+            nGroups = numel(info.Groups);
+            testCase.verifyGreaterThanOrEqual(nGroups, 3, ...
+                "Expected at least 3 committed trial groups in HDF5.");
+        end
+
     end
 
     methods (Access = private)
