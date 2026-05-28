@@ -49,9 +49,9 @@ classdef OptoEditorPanel < handle
                 'Title', 'Optogenetic stim (LED, AO2)', ...
                 'Tag', 'optoEditorPanel');
 
-            grid = uigridlayout(obj.Panel, [7, 2]);
+            grid = uigridlayout(obj.Panel, [7, 3]);
             grid.RowHeight = {22, 22, 22, 22, 26, 18, '1x'};
-            grid.ColumnWidth = {'fit', '1x'};
+            grid.ColumnWidth = {'fit', 90, '1x'};
 
             % Row 1: pulse duration
             lbl1 = uilabel(grid, 'Text', 'Pulse duration (ms)');
@@ -90,7 +90,7 @@ classdef OptoEditorPanel < handle
 
             % Row 5: buttons (Update + Clear in a sub-layout)
             buttonRow = uigridlayout(grid, [1, 2]);
-            buttonRow.Layout.Row = 5; buttonRow.Layout.Column = [1 2];
+            buttonRow.Layout.Row = 5; buttonRow.Layout.Column = [1 3];
             buttonRow.ColumnWidth = {'1x', '1x'};
             buttonRow.Padding = [0 0 0 0];
             obj.updateButton = uibutton(buttonRow, 'push', ...
@@ -107,11 +107,11 @@ classdef OptoEditorPanel < handle
                 'Text', '', ...
                 'Tag', 'statusLabel', ...
                 'FontColor', [0.7 0 0]);
-            obj.statusLabel.Layout.Row = 6; obj.statusLabel.Layout.Column = [1 2];
+            obj.statusLabel.Layout.Row = 6; obj.statusLabel.Layout.Column = [1 3];
 
             % Row 7: preview axes
             obj.previewAxes = uiaxes(grid, 'Tag', 'previewAxes');
-            obj.previewAxes.Layout.Row = 7; obj.previewAxes.Layout.Column = [1 2];
+            obj.previewAxes.Layout.Row = 7; obj.previewAxes.Layout.Column = [1 3];
             % Simpler than dual-axis ticks (Q7): show % on the Y axis and the
             % full-scale volts equivalent in the title, so the user can sanity-
             % check what the LED driver actually sees.

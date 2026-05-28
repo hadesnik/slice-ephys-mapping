@@ -53,9 +53,9 @@ classdef CommandEditorPanel < handle
                 'Title', 'Command stim (AO0, mode-aware)', ...
                 'Tag', 'commandEditorPanel');
 
-            grid = uigridlayout(obj.Panel, [7, 2]);
+            grid = uigridlayout(obj.Panel, [7, 3]);
             grid.RowHeight = {22, 22, 22, 22, 26, 18, '1x'};
-            grid.ColumnWidth = {'fit', '1x'};
+            grid.ColumnWidth = {'fit', 90, '1x'};
 
             lbl1 = uilabel(grid, 'Text', 'Pulse duration (ms)');
             lbl1.Layout.Row = 1; lbl1.Layout.Column = 1;
@@ -89,7 +89,7 @@ classdef CommandEditorPanel < handle
             obj.nPulsesField.Layout.Row = 4; obj.nPulsesField.Layout.Column = 2;
 
             buttonRow = uigridlayout(grid, [1, 2]);
-            buttonRow.Layout.Row = 5; buttonRow.Layout.Column = [1 2];
+            buttonRow.Layout.Row = 5; buttonRow.Layout.Column = [1 3];
             buttonRow.ColumnWidth = {'1x', '1x'};
             buttonRow.Padding = [0 0 0 0];
             obj.updateButton = uibutton(buttonRow, 'push', ...
@@ -105,10 +105,10 @@ classdef CommandEditorPanel < handle
                 'Text', '', ...
                 'Tag', 'statusLabel', ...
                 'FontColor', [0.7 0 0]);
-            obj.statusLabel.Layout.Row = 6; obj.statusLabel.Layout.Column = [1 2];
+            obj.statusLabel.Layout.Row = 6; obj.statusLabel.Layout.Column = [1 3];
 
             obj.previewAxes = uiaxes(grid, 'Tag', 'previewAxes');
-            obj.previewAxes.Layout.Row = 7; obj.previewAxes.Layout.Column = [1 2];
+            obj.previewAxes.Layout.Row = 7; obj.previewAxes.Layout.Column = [1 3];
             title(obj.previewAxes, 'Preview');
             xlabel(obj.previewAxes, 'Time (ms)');
             ylabel(obj.previewAxes, obj.previewYLabelForMode(obj.Mode));

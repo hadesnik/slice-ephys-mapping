@@ -4,8 +4,9 @@ classdef MainWindow < handle
     % DAQ + telegraph.
     %
     % Layout (programmatic, no .mlapp):
-    %   LEFT column  (350 px)   : ControlsPanel / OptoEditorPanel / CommandEditorPanel
-    %   RIGHT column (remainder): TrialPlotPanel (top ~280 px) / TrendPlotsPanel (fills)
+    %   COL 1 (350 px) : ControlsPanel / OptoEditorPanel / CommandEditorPanel
+    %   COL 2 (1x)     : StimulusResponsePanel (top, large) / TrialPlotPanel (bottom, small)
+    %   COL 3 (260 px) : TrendPlotsPanel (narrow vertical strip)
     %
     % A Debug menu provides the v1 hook for flipping the FakeTelegraph mode and
     % nudging the gain so the wiring can be exercised without front-panel
@@ -26,6 +27,7 @@ classdef MainWindow < handle
         Figure
         ControlsPanel
         TrialPlotPanel
+        StimulusResponsePanel
         TrendPlotsPanel
         OptoEditorPanel
         CommandEditorPanel
@@ -176,31 +178,39 @@ classdef MainWindow < handle
         end
 
         function buildPanels(obj)
-            outer = uigridlayout(obj.Figure, [1 2]);
-            outer.ColumnWidth = {350, '1x'};
+            outer = uigridlayout(obj.Figure, [1 3]);
+            outer.ColumnWidth = {350, '1x', 260};
             outer.RowHeight   = {'1x'};
             outer.Padding     = [6 6 6 6];
             outer.ColumnSpacing = 6;
 
             leftCol = uigridlayout(outer, [3 1]);
             leftCol.Layout.Row = 1; leftCol.Layout.Column = 1;
-            leftCol.RowHeight   = {260, '1x', '1x'};
+            leftCol.RowHeight   = {220, '1x', '1x'};
             leftCol.ColumnWidth = {'1x'};
             leftCol.Padding     = [0 0 0 0];
             leftCol.RowSpacing  = 6;
 
-            rightCol = uigridlayout(outer, [2 1]);
-            rightCol.Layout.Row = 1; rightCol.Layout.Column = 2;
-            rightCol.RowHeight   = {280, '1x'};
+            midCol = uigridlayout(outer, [2 1]);
+            midCol.Layout.Row = 1; midCol.Layout.Column = 2;
+            % Stim response gets a fixed slice; seal-test ping fills the rest.
+            midCol.RowHeight   = {300, '1x'};
+            midCol.ColumnWidth = {'1x'};
+            midCol.Padding     = [0 0 0 0];
+            midCol.RowSpacing  = 6;
+
+            rightCol = uigridlayout(outer, [1 1]);
+            rightCol.Layout.Row = 1; rightCol.Layout.Column = 3;
+            rightCol.RowHeight   = {'1x'};
             rightCol.ColumnWidth = {'1x'};
             rightCol.Padding     = [0 0 0 0];
-            rightCol.RowSpacing  = 6;
 
-            obj.ControlsPanel       = patchclamp.gui.ControlsPanel(leftCol, obj.Config);
-            obj.OptoEditorPanel     = patchclamp.gui.OptoEditorPanel(leftCol);
-            obj.CommandEditorPanel  = patchclamp.gui.CommandEditorPanel(leftCol);
-            obj.TrialPlotPanel      = patchclamp.gui.TrialPlotPanel(rightCol);
-            obj.TrendPlotsPanel     = patchclamp.gui.TrendPlotsPanel(rightCol);
+            obj.ControlsPanel          = patchclamp.gui.ControlsPanel(leftCol, obj.Config);
+            obj.OptoEditorPanel        = patchclamp.gui.OptoEditorPanel(leftCol);
+            obj.CommandEditorPanel     = patchclamp.gui.CommandEditorPanel(leftCol);
+            obj.StimulusResponsePanel  = patchclamp.gui.StimulusResponsePanel(midCol);
+            obj.TrialPlotPanel         = patchclamp.gui.TrialPlotPanel(midCol);
+            obj.TrendPlotsPanel        = patchclamp.gui.TrendPlotsPanel(rightCol);
         end
 
         function wireListeners(obj)
@@ -354,6 +364,13 @@ classdef MainWindow < handle
             catch
             end
             try
+                if isfield(r, 'layout')
+                    obj.StimulusResponsePanel.addTrial( ...
+                        r.aiCellUnits, r.sampleRateHz, r.mode, r.layout);
+                end
+            catch
+            end
+            try
                 obj.TrendPlotsPanel.addTrialResult(r);
             catch
             end
@@ -382,6 +399,7 @@ classdef MainWindow < handle
             obj.ControlsPanel.setMode(m);
             obj.CommandEditorPanel.setMode(m);
             obj.TrialPlotPanel.setMode(m);
+            obj.StimulusResponsePanel.setMode(m);
         end
 
         function onGainChanged(obj)
