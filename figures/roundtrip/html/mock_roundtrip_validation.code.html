@@ -1,0 +1,499 @@
+<!doctype html><html><head><meta charset='utf-8'>
+<title>Source for mock_roundtrip_validation.pdf</title>
+<style>
+body{font:14px/1.5 -apple-system,Segoe UI,Helvetica,Arial,sans-serif;max-width:920px;margin:2rem auto;padding:0 1rem;color:#222}
+h1{font-size:1.3rem} h2{font-size:1rem;margin-top:1.6rem;border-bottom:1px solid #ddd;padding-bottom:.2rem}
+.loc{color:#888;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.85rem}
+pre{background:#f6f8fa;border:1px solid #e1e4e8;border-radius:6px;padding:.8rem;overflow:auto;font:12px/1.45 ui-monospace,Menlo,Consolas,monospace}
+ul.toc{padding-left:1.2rem} ul.toc a{text-decoration:none}
+.thirdparty{color:#666;font-size:.9rem;margin-top:2rem}
+</style></head><body>
+<h1>Functions used to generate <code>mock_roundtrip_validation.pdf</code></h1>
+<p>Auto-generated source listing. Project functions are shown in full; third-party / standard-library calls are noted but not reproduced.</p>
+<ul class='toc'>
+<li><a href='#fn-0'>roundtrip_figure</a> <span class='loc'>src/slice_ephys_analysis/figures.py:61</span></li>
+<li><a href='#fn-1'>_mean_evoked_trace</a> <span class='loc'>src/slice_ephys_analysis/figures.py:34</span></li>
+<li><a href='#fn-2'>validate_session</a> <span class='loc'>src/slice_ephys_analysis/validate.py:16</span></li>
+<li><a href='#fn-3'>block_design</a> <span class='loc'>src/slice_ephys_analysis/design.py:23</span></li>
+<li><a href='#fn-4'>average_repeats</a> <span class='loc'>src/slice_ephys_analysis/design.py:77</span></li>
+<li><a href='#fn-5'>fit_weights</a> <span class='loc'>src/slice_ephys_analysis/regression.py:19</span></li>
+<li><a href='#fn-6'>pair_by_ensemble</a> <span class='loc'>src/slice_ephys_analysis/ei_coupling.py:15</span></li>
+<li><a href='#fn-7'>coupling_stats</a> <span class='loc'>src/slice_ephys_analysis/ei_coupling.py:33</span></li>
+<li><a href='#fn-8'>evoked_charge</a> <span class='loc'>src/slice_ephys_analysis/psc.py:28</span></li>
+<li><a href='#fn-9'>scaled_daq_volts_to_cell</a> <span class='loc'>src/slice_ephys_analysis/units.py:26</span></li>
+<li><a href='#fn-10'>justified_legend</a> <span class='loc'>src/slice_ephys_analysis/figure_helpers.py:329</span></li>
+<li><a href='#fn-11'>panel_label</a> <span class='loc'>src/slice_ephys_analysis/figure_helpers.py:315</span></li>
+</ul>
+<h2 id='fn-0'>roundtrip_figure</h2>
+<p class='loc'>src/slice_ephys_analysis/figures.py:61</p>
+<pre><code>def roundtrip_figure(session_dir: str | Path, outdir: str | Path = &quot;figures/roundtrip&quot;):
+    &quot;&quot;&quot;Build the mock-roundtrip validation figure for one session.&quot;&quot;&quot;
+    import matplotlib.pyplot as plt
+
+    apply_style()
+    session_dir = Path(session_dir)
+
+    idx = SessionIndex(session_dir)
+    gt = idx.ground_truth
+    if gt is None:
+        raise FileNotFoundError(f&quot;{session_dir} has no ground_truth.mat&quot;)
+    res = validate.validate_session(session_dir)
+
+    block_e = idx.block_by_holding(-70.0)
+    block_i = idx.block_by_holding(10.0)
+    d_e = design.average_repeats(design.block_design(block_e, idx.ensembles))
+    d_i = design.average_repeats(design.block_design(block_i, idx.ensembles))
+    paired = ei_coupling.pair_by_ensemble(d_e, d_i)
+    stats = ei_coupling.coupling_stats(paired)
+
+    fig, axes = plt.subplots(2, 2, figsize=(9.0, 8.6))
+    fig.subplots_adjust(bottom=0.30, hspace=0.42, wspace=0.32,
+                        left=0.09, right=0.97, top=0.95)
+    ax_a, ax_b, ax_c, ax_d = axes.flatten()
+
+    # Panels A/B compare the same quantity (pC per unit fill) -&gt; shared limits.
+    measurable_e = np.any(d_e[&quot;X&quot;] &gt; 0, axis=0)
+    lim = 1.1 * max(
+        float(np.max(gt[&quot;W_E_eff&quot;][measurable_e])), float(np.max(res[&quot;e&quot;][&quot;w&quot;])),
+        float(np.max(gt[&quot;W_I_eff&quot;][measurable_e])), float(np.max(res[&quot;i&quot;][&quot;w&quot;])), 1.0)
+
+    for ax, key, w_true, color, label in (
+            (ax_a, &quot;e&quot;, gt[&quot;W_E_eff&quot;], &quot;#1f77b4&quot;, &quot;excitation (VC −70 mV)&quot;),
+            (ax_b, &quot;i&quot;, gt[&quot;W_I_eff&quot;], &quot;#d62728&quot;, &quot;inhibition (VC +10 mV)&quot;)):
+        w = res[key][&quot;w&quot;]
+        connected = (w_true &gt; 1e-12) &amp; measurable_e
+        zero = (w_true &lt;= 1e-12) &amp; measurable_e
+        ax.plot([0, lim], [0, lim], &quot;-&quot;, color=&quot;0.75&quot;, lw=1, zorder=1)
+        ax.scatter(w_true[connected], w[connected], s=36, color=color,
+                   label=&quot;connected&quot;, zorder=3)
+        ax.scatter(w_true[zero], w[zero], s=28, facecolor=&quot;none&quot;,
+                   edgecolor=&quot;0.4&quot;, label=&quot;zero-weight / opsin−&quot;, zorder=2)
+        ax.set_xlim(-0.05 * lim, lim)
+        ax.set_ylim(-0.05 * lim, lim)
+        ax.set_xlabel(&quot;true weight (pC per unit fill)&quot;)
+        ax.set_ylabel(&quot;recovered weight (pC per unit fill)&quot;)
+        ax.set_title(label, fontsize=10)
+        ax.text(0.05, 0.90, f&quot;r = {res[key][&#x27;r_connected&#x27;]:.2f}&quot;,
+                transform=ax.transAxes, fontsize=9)
+        ax.legend(fontsize=8, loc=&quot;lower right&quot;, frameon=False)
+
+    # Panel C: grand-average evoked traces at both holdings.
+    tax_e, m_e, n_e = _mean_evoked_trace(block_e)
+    tax_i, m_i, n_i = _mean_evoked_trace(block_i)
+    ax_c.axvline(0, color=&quot;0.8&quot;, lw=0.8)
+    ax_c.plot(tax_e, m_e, color=&quot;#1f77b4&quot;, lw=1.2,
+              label=f&quot;VC −70 mV (n = {n_e})&quot;)
+    ax_c.plot(tax_i, m_i, color=&quot;#d62728&quot;, lw=1.2,
+              label=f&quot;VC +10 mV (n = {n_i})&quot;)
+    ax_c.axhline(0, color=&quot;0.85&quot;, lw=0.8)
+    ax_c.set_xlabel(&quot;time from stim onset (ms)&quot;)
+    ax_c.set_ylabel(&quot;evoked current (pA)&quot;)
+    ax_c.legend(fontsize=8, frameon=False, loc=&quot;lower right&quot;)
+
+    # Panel D: per-ensemble E vs I coupling.
+    ax_d.scatter(paired[&quot;e&quot;], paired[&quot;i&quot;], s=12, color=&quot;0.35&quot;, alpha=0.6)
+    xfit = np.linspace(float(np.min(paired[&quot;e&quot;])), float(np.max(paired[&quot;e&quot;])), 10)
+    ax_d.plot(xfit, stats[&quot;slope&quot;] * xfit + stats[&quot;intercept&quot;], &quot;-&quot;,
+              color=&quot;#2ca02c&quot;, lw=1.4)
+    ax_d.set_xlabel(&quot;evoked E charge (pC, VC −70 mV)&quot;)
+    ax_d.set_ylabel(&quot;evoked I charge (pC, VC +10 mV)&quot;)
+    ax_d.text(0.05, 0.90, f&quot;r = {stats[&#x27;r&#x27;]:.2f}&quot;, transform=ax_d.transAxes,
+              fontsize=9)
+
+    for ax, letter in ((ax_a, &quot;A&quot;), (ax_b, &quot;B&quot;), (ax_c, &quot;C&quot;), (ax_d, &quot;D&quot;)):
+        panel_label(ax, letter)
+
+    justified_legend(
+        fig,
+        &quot;Mock-roundtrip validation: known synaptic weights are recovered from a &quot;
+        &quot;simulated ensemble E/I mapping session.&quot;,
+        f&quot;(A) Recovered vs ground-truth excitatory weight per candidate cell &quot;
+        f&quot;(pC of evoked charge per unit fill fraction), ridge regression on the &quot;
+        f&quot;{d_e[&#x27;y&#x27;].size}-ensemble fill-fraction design matrix at −70 mV &quot;
+        f&quot;holding; filled symbols are truly connected cells, open symbols &quot;
+        f&quot;zero-weight or opsin− cells, gray line is unity; the never-&quot;
+        f&quot;stimulated patched cell is excluded. (B) Same for the inhibitory &quot;
+        f&quot;pathway at +10 mV holding. Panels A and B share identical axis &quot;
+        f&quot;limits. (C) Grand-average baseline-subtracted evoked current across &quot;
+        f&quot;all ensemble trials, aligned to stimulus onset: net inward at &quot;
+        f&quot;−70 mV (excitation) and net outward at +10 mV (inhibition). &quot;
+        f&quot;(D) Per-ensemble evoked E charge vs evoked I charge, paired by &quot;
+        f&quot;ensembleId across the two holding blocks (sign-corrected so larger &quot;
+        f&quot;means more input; charge integrated 2–60 ms after onset, &quot;
+        f&quot;baseline = pre-onset median), with the linear I~E fit (green). &quot;
+        f&quot;Session {session_dir.name}, seed {int(gt[&#x27;seed&#x27;])}.&quot;)
+
+    savefig(fig, &quot;mock_roundtrip_validation&quot;, outdir=str(outdir), functions=[
+        roundtrip_figure, _mean_evoked_trace,
+        validate.validate_session, design.block_design, design.average_repeats,
+        regression.fit_weights, ei_coupling.pair_by_ensemble,
+        ei_coupling.coupling_stats, psc.evoked_charge,
+        units.scaled_daq_volts_to_cell, justified_legend, panel_label,
+    ], strict=True)
+    plt.close(fig)
+    return Path(outdir)
+</code></pre>
+<h2 id='fn-1'>_mean_evoked_trace</h2>
+<p class='loc'>src/slice_ephys_analysis/figures.py:34</p>
+<pre><code>def _mean_evoked_trace(block, window_s: float = 0.08):
+    &quot;&quot;&quot;Grand-average evoked scaled-output trace (pA) around stim onset.&quot;&quot;&quot;
+    traces = []
+    n_pre = None
+    for t in block.stim_trials():
+        v = t.scaled_output_volts()
+        if v is None:
+            continue
+        trace = units.scaled_daq_volts_to_cell(v, &quot;VC&quot;, t.ephys[&quot;gains&quot;])
+        onset = t.onset_in_snippet
+        fs = t.fs
+        pre = int(0.02 * fs)
+        post = int(window_s * fs)
+        if onset - pre &lt; 0 or onset + post &gt; trace.size:
+            continue
+        seg = trace[onset - pre:onset + post]
+        seg = seg - np.median(seg[:pre])
+        traces.append(seg)
+        n_pre = pre
+    if not traces:
+        return None, None, None
+    m = np.mean(np.vstack(traces), axis=0)
+    fs = block.stim_trials()[0].fs
+    tax = (np.arange(m.size) - n_pre) / fs * 1000.0  # ms relative to onset
+    return tax, m, len(traces)
+</code></pre>
+<h2 id='fn-2'>validate_session</h2>
+<p class='loc'>src/slice_ephys_analysis/validate.py:16</p>
+<pre><code>def validate_session(session_dir, model: str = &quot;ridge&quot;,
+                     n_permutations: int = 0) -&gt; dict:
+    &quot;&quot;&quot;Full pipeline on a mock session; returns recovery metrics.
+
+    Returns dict with, per pathway (e / i): recovered w, true w, pearson r on
+    connected cells, and (with permutations) the fraction of zero-truth cells
+    that stay under the null band.
+    &quot;&quot;&quot;
+    idx = SessionIndex(session_dir)
+    if idx.ground_truth is None:
+        raise FileNotFoundError(f&quot;{session_dir} has no ground_truth.mat (not a mock session)&quot;)
+    gt = idx.ground_truth
+
+    out: dict = {&quot;session_dir&quot;: str(session_dir)}
+    for key, holding, w_true in ((&quot;e&quot;, -70.0, gt[&quot;W_E_eff&quot;]),
+                                 (&quot;i&quot;, 10.0, gt[&quot;W_I_eff&quot;])):
+        block = idx.block_by_holding(holding)
+        if block is None:
+            out[key] = None
+            continue
+        d = design.average_repeats(design.block_design(block, idx.ensembles))
+        fit = regression.fit_weights(d[&quot;X&quot;], d[&quot;y&quot;], model=model,
+                                     n_permutations=n_permutations)
+        w = fit[&quot;w&quot;]
+        # A cell that never appears in any ensemble (all-zero X column — the
+        # patched cell is excluded from membership by design) has an
+        # unmeasurable weight: leave it out of every recovery metric.
+        measurable = np.any(np.asarray(d[&quot;X&quot;]) &gt; 0, axis=0)
+        connected = (w_true &gt; 1e-12) &amp; measurable
+        zero_truth = (w_true &lt;= 1e-12) &amp; measurable
+        r = float(np.corrcoef(w[connected], w_true[connected])[0, 1]) \
+            if connected.sum() &gt; 2 else float(&quot;nan&quot;)
+        zero_ok = float(&quot;nan&quot;)
+        if n_permutations &gt; 0 and zero_truth.any():
+            zero_ok = float(np.mean(np.abs(w[zero_truth]) &lt;= fit[&quot;null_hi&quot;][zero_truth]))
+        out[key] = {
+            &quot;w&quot;: w,
+            &quot;w_true&quot;: np.asarray(w_true, dtype=float),
+            &quot;r_connected&quot;: r,
+            &quot;cv_r2&quot;: fit[&quot;cv_r2&quot;],
+            &quot;zero_cells_under_null&quot;: zero_ok,
+            &quot;n_trials&quot;: d[&quot;y&quot;].size,
+            &quot;blank_sigma&quot;: d[&quot;blank_sigma&quot;],
+        }
+    return out
+</code></pre>
+<h2 id='fn-3'>block_design</h2>
+<p class='loc'>src/slice_ephys_analysis/design.py:23</p>
+<pre><code>def block_design(block: Block, ens: dict,
+                 window_s: tuple[float, float] = psc.TOTAL_WINDOW_S) -&gt; dict:
+    &quot;&quot;&quot;Assemble X, y, and QC info for one block.
+
+    Returns dict with:
+      X            (nUsed x nCells) fill-fraction design rows
+      y            (nUsed,) signed-corrected evoked charge (pC)
+      ensemble_ids (nUsed,) 1-based rows into ens.X
+      cell_ids     (nCells,)
+      blank_sigma  noise floor: std of blank-trial &quot;evoked charge&quot;
+      holding_mv, n_dropped
+    &quot;&quot;&quot;
+    holding = block.holding_mv
+    if not np.isfinite(holding):
+        raise ValueError(&quot;block has no finite holdingMv (is this a CC block?)&quot;)
+    sign = -1.0 if holding &lt; -30 else 1.0  # -70 -&gt; flip inward E positive
+
+    X_full = np.asarray(ens[&quot;X&quot;], dtype=float)
+    rows, ys = [], []
+    n_dropped = 0
+    for t in block.stim_trials():
+        v = t.scaled_output_volts()
+        if v is None or not np.isfinite(t.ensemble_id):
+            n_dropped += 1
+            continue
+        trace = units.scaled_daq_volts_to_cell(v, &quot;VC&quot;, t.ephys[&quot;gains&quot;])
+        q = psc.evoked_charge(trace, t.fs, t.onset_in_snippet, window_s)
+        if not np.isfinite(q):
+            n_dropped += 1
+            continue
+        rows.append(int(t.ensemble_id) - 1)  # MATLAB 1-based -&gt; 0-based
+        ys.append(sign * q)
+
+    blanks = []
+    for t in block.blank_trials():
+        v = t.scaled_output_volts()
+        if v is None:
+            continue
+        trace = units.scaled_daq_volts_to_cell(v, &quot;VC&quot;, t.ephys[&quot;gains&quot;])
+        q = psc.evoked_charge(trace, t.fs, t.onset_in_snippet, window_s)
+        if np.isfinite(q):
+            blanks.append(sign * q)
+
+    return {
+        &quot;X&quot;: X_full[rows, :],
+        &quot;y&quot;: np.asarray(ys, dtype=float),
+        &quot;ensemble_ids&quot;: np.asarray(rows, dtype=int) + 1,
+        &quot;cell_ids&quot;: np.asarray(ens[&quot;cellIds&quot;], dtype=float).flatten(),
+        &quot;blank_sigma&quot;: float(np.std(blanks)) if blanks else float(&quot;nan&quot;),
+        &quot;holding_mv&quot;: holding,
+        &quot;n_dropped&quot;: n_dropped,
+    }
+</code></pre>
+<h2 id='fn-4'>average_repeats</h2>
+<p class='loc'>src/slice_ephys_analysis/design.py:77</p>
+<pre><code>def average_repeats(design: dict) -&gt; dict:
+    &quot;&quot;&quot;Average y over repeated presentations of the same ensembleId.&quot;&quot;&quot;
+    ids = design[&quot;ensemble_ids&quot;]
+    uniq = np.unique(ids)
+    X_out = np.zeros((uniq.size, design[&quot;X&quot;].shape[1]))
+    y_out = np.zeros(uniq.size)
+    for i, u in enumerate(uniq):
+        sel = ids == u
+        X_out[i] = design[&quot;X&quot;][np.argmax(sel)]
+        y_out[i] = float(np.mean(design[&quot;y&quot;][sel]))
+    out = dict(design)
+    out.update({&quot;X&quot;: X_out, &quot;y&quot;: y_out, &quot;ensemble_ids&quot;: uniq})
+    return out
+</code></pre>
+<h2 id='fn-5'>fit_weights</h2>
+<p class='loc'>src/slice_ephys_analysis/regression.py:19</p>
+<pre><code>def fit_weights(X: np.ndarray, y: np.ndarray, model: str = &quot;ridge&quot;,
+                cv: int = 5, n_permutations: int = 0,
+                random_state: int = 0) -&gt; dict:
+    &quot;&quot;&quot;Fit w and CV metrics; optionally a permutation null band.
+
+    Returns dict: w (nCells,), intercept, cv_r2, model, null_hi (per-cell
+    97.5th percentile of |w| under shuffled y; NaN array if no permutations).
+    &quot;&quot;&quot;
+    X = np.asarray(X, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if X.shape[0] != y.size:
+        raise ValueError(f&quot;X has {X.shape[0]} rows but y has {y.size}&quot;)
+    n_splits = min(cv, max(2, X.shape[0] // 2))
+
+    def make_model():
+        if model == &quot;ridge&quot;:
+            return RidgeCV(alphas=np.logspace(-3, 3, 13))
+        if model == &quot;lasso&quot;:
+            return LassoCV(cv=n_splits, random_state=random_state, max_iter=50000)
+        raise ValueError(f&quot;unknown model {model!r}&quot;)
+
+    est = make_model().fit(X, y)
+    w = np.asarray(est.coef_, dtype=float).flatten()
+
+    cv_r2 = float(np.mean(cross_val_score(
+        make_model(), X, y, cv=KFold(n_splits, shuffle=True, random_state=random_state),
+        scoring=&quot;r2&quot;)))
+
+    null_hi = np.full(w.size, np.nan)
+    if n_permutations &gt; 0:
+        rng = np.random.default_rng(random_state)
+        null_w = np.zeros((n_permutations, w.size))
+        for p in range(n_permutations):
+            null_w[p] = np.asarray(make_model().fit(X, rng.permutation(y)).coef_).flatten()
+        null_hi = np.percentile(np.abs(null_w), 97.5, axis=0)
+
+    return {
+        &quot;w&quot;: w,
+        &quot;intercept&quot;: float(np.atleast_1d(est.intercept_)[0]),
+        &quot;cv_r2&quot;: cv_r2,
+        &quot;model&quot;: model,
+        &quot;null_hi&quot;: null_hi,
+    }
+</code></pre>
+<h2 id='fn-6'>pair_by_ensemble</h2>
+<p class='loc'>src/slice_ephys_analysis/ei_coupling.py:15</p>
+<pre><code>def pair_by_ensemble(design_e: dict, design_i: dict) -&gt; dict:
+    &quot;&quot;&quot;Match E-block and I-block designs on ensembleId.
+
+    Inputs are design.block_design outputs (rep-averaged or not). Returns
+    dict with ensemble_ids, e (pC, positive = more excitation), i (pC,
+    positive = more inhibition), X (fill design rows for the paired set).
+    &quot;&quot;&quot;
+    ids_e = design_e[&quot;ensemble_ids&quot;]
+    ids_i = design_i[&quot;ensemble_ids&quot;]
+    common, idx_e, idx_i = np.intersect1d(ids_e, ids_i, return_indices=True)
+    return {
+        &quot;ensemble_ids&quot;: common,
+        &quot;e&quot;: design_e[&quot;y&quot;][idx_e],
+        &quot;i&quot;: design_i[&quot;y&quot;][idx_i],
+        &quot;X&quot;: design_e[&quot;X&quot;][idx_e, :],
+    }
+</code></pre>
+<h2 id='fn-7'>coupling_stats</h2>
+<p class='loc'>src/slice_ephys_analysis/ei_coupling.py:33</p>
+<pre><code>def coupling_stats(paired: dict) -&gt; dict:
+    &quot;&quot;&quot;Correlation + linear I~E fit + studentized residual outliers.&quot;&quot;&quot;
+    e, i = paired[&quot;e&quot;], paired[&quot;i&quot;]
+    if e.size &lt; 3:
+        raise ValueError(&quot;need at least 3 paired ensembles&quot;)
+    r = float(np.corrcoef(e, i)[0, 1])
+    slope, intercept = np.polyfit(e, i, 1)
+    resid = i - (slope * e + intercept)
+    sd = float(np.std(resid))
+    z = resid / sd if sd &gt; 0 else np.zeros_like(resid)
+    return {
+        &quot;r&quot;: r,
+        &quot;slope&quot;: float(slope),
+        &quot;intercept&quot;: float(intercept),
+        &quot;residual_z&quot;: z,
+        &quot;high_e_low_i&quot;: paired[&quot;ensemble_ids&quot;][z &lt; -2.0],
+        &quot;low_e_high_i&quot;: paired[&quot;ensemble_ids&quot;][z &gt; 2.0],
+    }
+</code></pre>
+<h2 id='fn-8'>evoked_charge</h2>
+<p class='loc'>src/slice_ephys_analysis/psc.py:28</p>
+<pre><code>def evoked_charge(trace: np.ndarray, fs: float, onset_idx: int,
+                  window_s: tuple[float, float] = TOTAL_WINDOW_S) -&gt; float:
+    &quot;&quot;&quot;Signed evoked charge (pC) in a post-onset window, baseline-subtracted.&quot;&quot;&quot;
+    base = baseline(trace, onset_idx)
+    i0 = onset_idx + int(round(window_s[0] * fs))
+    i1 = min(len(trace), onset_idx + int(round(window_s[1] * fs)))
+    if i1 &lt;= i0:
+        return float(&quot;nan&quot;)
+    return float(np.sum(trace[i0:i1] - base) / fs)
+</code></pre>
+<h2 id='fn-9'>scaled_daq_volts_to_cell</h2>
+<p class='loc'>src/slice_ephys_analysis/units.py:26</p>
+<pre><code>def scaled_daq_volts_to_cell(volts, mode: str, gain: dict):
+    &quot;&quot;&quot;AI sample (DAQ volts) -&gt; cell units (pA in VC, mV in IC).&quot;&quot;&quot;
+    _check_mode(mode)
+    v = np.asarray(volts, dtype=float)
+    if mode == &quot;VC&quot;:
+        return v * float(gain[&quot;scaledVcPaPerV&quot;])
+    return v * (1000.0 / float(gain[&quot;scaledIcMvPerMv&quot;]))
+</code></pre>
+<h2 id='fn-10'>justified_legend</h2>
+<p class='loc'>src/slice_ephys_analysis/figure_helpers.py:329</p>
+<pre><code>def justified_legend(fig, title: str, body: str, *, x0: float = 0.06,
+                     x1: float = 0.94, y_top: float | None = None, fontsize: float = 10,
+                     line_spacing: float = 1.5, bottom_margin: float = 0.03,
+                     min_fontsize: float = 8.0) -&gt; float:
+    &quot;&quot;&quot;Render a paper-style figure legend: a **bold** ``title`` run followed by ``body``,
+    fully justified between ``x0``..``x1`` (figure fraction), starting with the first
+    line&#x27;s top at ``y_top`` and growing downward (conventions 1 &amp; 5).
+
+    Panel references in ``body`` such as ``(A)`` / ``(A,B)`` / ``(A-D)`` are bold. Write
+    the body as per-panel references -- ``(A) ... (B) ...`` -- naming exactly what each
+    panel shows (axes, conditions, groups, pooling, time windows) plus a brief note on
+    the analytical approach, so the figure stands alone. The last line is left-aligned
+    (standard for justified paragraphs). Words are placed individually because matplotlib
+    has no native full justification.
+
+    Overlap safety (convention 3: a legend must NEVER obscure any panel/axis/figure text):
+    - ``y_top=None`` (default) auto-places the legend&#x27;s top just below the lowest panel
+      text (tick labels / axis labels), so it cannot overlap the panels above it. Pass an
+      explicit ``y_top`` only to override.
+    - Body text renders at ``fontsize`` (default **10 pt**) and is shrunk only as far as
+      ``min_fontsize`` (default **8 pt** -- the convention-6 floor) if needed so the whole
+      block fits above ``bottom_margin``; it can never run off the bottom either. Size the
+      reserved band (taller figure + ``fig.subplots_adjust(bottom=...)``) so it stays at
+      the full 10 pt without shrinking.
+
+    Returns the figure-fraction y below the last line.
+    &quot;&quot;&quot;
+    fig.canvas.draw()
+    rend = fig.canvas.get_renderer()
+    figw, figh = fig.bbox.width, fig.bbox.height
+    line_px = (x1 - x0) * figw
+
+    runs = [(w, True) for w in title.split()]
+    runs += [(w, bool(_PANEL_REF.fullmatch(w))) for w in body.split()]
+
+    def _layout(fs):
+        &quot;&quot;&quot;Word widths + greedy line-wrap at font size ``fs``.&quot;&quot;&quot;
+        def _w(word, bold):
+            t = fig.text(0, 0, word, fontsize=fs, fontweight=&quot;bold&quot; if bold else &quot;normal&quot;)
+            w = t.get_window_extent(rend).width
+            t.remove()
+            return w
+        space = max(_w(&quot;m m&quot;, False) - _w(&quot;mm&quot;, False), 2.0)
+        widths = [_w(w, b) for w, b in runs]
+        lines, cur, cur_w = [], [], 0.0
+        for i in range(len(runs)):
+            add = widths[i] + (space if cur else 0.0)
+            if cur and cur_w + add &gt; line_px:
+                lines.append(cur)
+                cur, cur_w = [i], widths[i]
+            else:
+                cur.append(i)
+                cur_w += add
+        if cur:
+            lines.append(cur)
+        return lines, widths, space
+
+    # Auto-place below the lowest panel text so the legend never overlaps the panels.
+    if y_top is None:
+        ys = []
+        for ax in fig.axes:
+            try:
+                bb = ax.get_tightbbox(rend)
+            except Exception:
+                bb = None
+            if bb is not None and bb.height &gt; 0:
+                ys.append(bb.y0 / figh)
+        y_top = (min(ys) if ys else 0.22) - 0.025
+
+    # Shrink the font (to the 8 pt floor) until the block fits above ``bottom_margin``.
+    fs = float(fontsize)
+    while True:
+        lines, widths, space = _layout(fs)
+        line_h = fs * line_spacing * fig.dpi / 72.0 / figh     # fig-fraction per line
+        if (y_top - len(lines) * line_h) &gt;= bottom_margin or fs &lt;= min_fontsize:
+            break
+        fs -= 0.5
+
+    line_h_px = fs * line_spacing * fig.dpi / 72.0
+    y = y_top * figh
+    for li, line in enumerate(lines):
+        wsum = sum(widths[i] for i in line)
+        n = len(line)
+        gap = space if (li == len(lines) - 1 or n == 1) else (line_px - wsum) / (n - 1)
+        x = x0 * figw
+        for i in line:
+            word, bold = runs[i]
+            t = fig.text(x / figw, y / figh, word, fontsize=fs,
+                         fontweight=&quot;bold&quot; if bold else &quot;normal&quot;, ha=&quot;left&quot;, va=&quot;top&quot;)
+            t.set_gid(&quot;legend&quot;)          # tag so check_text_overlaps groups the words
+            x += widths[i] + gap
+        y -= line_h_px
+    return y / figh
+</code></pre>
+<h2 id='fn-11'>panel_label</h2>
+<p class='loc'>src/slice_ephys_analysis/figure_helpers.py:315</p>
+<pre><code>def panel_label(ax, letter: str, *, x: float = -0.08, y: float = 1.04,
+                fontsize: int = 14) -&gt; None:
+    &quot;&quot;&quot;Bold **14 pt** panel letter just above the top-left of an axes (axes-fraction
+    coords; convention 2). Default ``y`` sits just above the axes (not up near a
+    suptitle), so the letter clears the figure title on single-row layouts.
+    &quot;&quot;&quot;
+    t = ax.text(x, y, letter, transform=ax.transAxes, fontsize=fontsize,
+                fontweight=&quot;bold&quot;, va=&quot;bottom&quot;, ha=&quot;right&quot;, clip_on=False)
+    t.set_gid(&quot;panel-letter&quot;)
+</code></pre>
+</body></html>

@@ -1,0 +1,107 @@
+# Mock config: full end-to-end development on macOS, no hardware.
+# Parsed by tfp.io.loadConfig (hand parser: flat sections only, one nesting
+# level, inline [a, b, c] arrays; no nested maps beyond one level).
+
+hardwareKind: mock
+
+paths:
+  dataDir: ./data
+  dmdRepo: ''            # provenance only; sem_setup owns the addpath
+
+daq:
+  sampleRate: 20000
+  analogInChannels: [0, 1]
+  aiRangeV: [-10, 10]
+  analogOutChannels: [0, 1]
+  digitalOutChannels: [port0/line0]
+  digitalInChannels: []
+  ai_scaledOutput: 0     # Multiclamp scaled output -> this AI channel
+  ao_laser: 0            # laser power modulation AO
+  ao_cellCommand: 1      # Multiclamp EXT COMMAND AO
+  do_sync: port0/line0   # session-boundary marker line
+
+ephys:
+  commandVcMvPerV: 20    # 700B EXT COMMAND physical constant (VC)
+  commandIcPaPerV: 400   # 700B EXT COMMAND physical constant (IC)
+  scaledVcPaPerV: 1000   # front-panel VC output gain (mock default)
+  scaledIcMvPerMv: 20    # front-panel IC output gain (mock default)
+  sealTest_preMs: 20
+  sealTest_stepMs: 100
+  sealTest_postMs: 30
+  sealTest_amplitudeVcMv: -5
+  sealTest_amplitudeIcPa: -20
+  sealTest_everyNTrials: 100
+  rsAbortMohm: 30
+  rsDriftAbortFrac: 0.25
+  holdingVcEMv: -70      # VC holding for excitation blocks
+  holdingVcIMv: 10       # VC holding for inhibition blocks
+
+dmd:
+  nRows: 800
+  nCols: 1280
+  maxPatternRate: 12500
+  loadLatencyMsPerPattern: 0
+  debugFigure: false
+  chunkSize: 250         # patterns preloaded per DMD sequence
+  spotRadiusPx: 17       # ~925 px disk (fillFactorEnsemble docs)
+
+laser:
+  ao_voltage_max: 5.0
+  calibration_file: ''
+
+timing:
+  stimDurS: 0.010
+  itiMeanS: 0.08
+  itiJitterS: 0.02
+  preS: 0.05             # baseline window sliced before stim onset
+  postS: 0.15            # response window sliced after stim offset
+
+fov:
+  widthUm: 300
+  heightUm: 600
+  umPerDmdPx: 0.6        # mock scanfield/DMD scale used to fabricate targets
+  layerBoundariesUm: [0, 120, 300, 420, 600]
+
+ensemble:
+  nEnsembles: 120
+  sizeMin: 5
+  sizeMax: 15
+  fillLevels: [0.25, 0.5, 0.75, 1.0]
+  nBlank: 10
+  nSingleCell: 0
+  laserVolts: 2.0
+  blocks: [VC-70, VC+10]
+
+ppsf:
+  offsetsMaxUm: 60
+  nPointsPerHalfAxis: 4
+  laserVoltsLevels: [0.5, 1.0, 2.0]
+  fillFactors: [0.25, 0.5, 1.0]
+  nReps: 2
+  radiusPx: 17
+
+groundTruth:
+  nCells: 25
+  seed: 42
+  opsinNegFraction: 0.15
+  connectedFraction: 0.3
+  wEMeanPc: 2.0          # mean EPSC charge (pC) per presynaptic spike
+  releaseProb: 0.85
+  wIGainPc: 0.6          # IPSC charge (pC) per unit population drive
+  iCouplingSigma: 0.5
+  opsinGainMean: 2.5     # expected spikes per pulse at fill = 1
+  maxSpikesPerPulse: 3
+  spikeLatencyMs: 2.5
+  spikeJitterMs: 1.0
+  monoLatencyMs: 2.0
+  diLatencyMs: 5.0
+  diJitterMs: 1.5
+  rsMohm: 12
+  rinMohm: 150
+  cmPf: 120
+  vrestMv: -65
+  noiseRmsPa: 4
+  noiseRmsMv: 0.4
+
+ui:
+  liveFigure: false

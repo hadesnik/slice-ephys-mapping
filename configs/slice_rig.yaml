@@ -1,0 +1,96 @@
+# Slice-rig config. The slice scope is NOT the rig documented in the DMD
+# repo's CLAUDE.md — every hardware assignment below is a placeholder and is
+# marked %VERIFY. Fill each one during Phase B bringup (see docs/WIRING.md)
+# and delete the marker when the physical wire is confirmed.
+#
+# Parsed by tfp.io.loadConfig (flat sections, one nesting level).
+
+hardwareKind: real
+
+paths:
+  dataDir: ./data
+  dmdRepo: ''            # provenance only; sem_setup owns the addpath
+
+daq:
+  board: Dev1            # %VERIFY NI device name on the slice rig
+  sampleRate: 20000
+  analogInChannels: [0, 1]     # %VERIFY all AI channels acquired continuously
+  aiRangeV: [-10, 10]          # %VERIFY
+  aiSingleEndedChannels: []    # %VERIFY (trigger monitors etc.)
+  analogOutChannels: [0, 1]    # %VERIFY must contain ao_laser and ao_cellCommand
+  digitalOutChannels: [port0/line0]  # %VERIFY
+  digitalInChannels: []        # %VERIFY
+  ai_scaledOutput: 0     # %VERIFY Multiclamp 700B SCALED OUTPUT -> AIx
+  ai_commandMonitor: 1   # %VERIFY (optional) 700B command monitor -> AIx
+  ao_laser: 0            # %VERIFY laser power-modulation AO
+  ao_cellCommand: 1      # %VERIFY 700B EXT COMMAND input <- AOx
+  do_sync: port0/line0   # %VERIFY session-boundary marker (operator scope)
+
+ephys:
+  commandVcMvPerV: 20    # 700B EXT COMMAND physical constant (VC)
+  commandIcPaPerV: 400   # 700B EXT COMMAND physical constant (IC)
+  scaledVcPaPerV: 1000   # %VERIFY front-panel VC output gain
+  scaledIcMvPerMv: 20    # %VERIFY front-panel IC output gain
+  sealTest_preMs: 20
+  sealTest_stepMs: 100
+  sealTest_postMs: 30
+  sealTest_amplitudeVcMv: -5
+  sealTest_amplitudeIcPa: -20
+  sealTest_everyNTrials: 100
+  rsAbortMohm: 30
+  rsDriftAbortFrac: 0.25
+  holdingVcEMv: -70
+  holdingVcIMv: 10
+
+dmd:
+  # %VERIFY which ALP board drives the slice-rig DMD. DLP7000 via ALP-4.1
+  # (the Waller-lab visible board) is the likely candidate: alpVersion '4.1',
+  # 768x1024. DLP650LNIR via ALP-4.3: '4.3', 800x1280.
+  alpVersion: '4.1'      # %VERIFY
+  nRows: 768             # %VERIFY matches the board above
+  nCols: 1024            # %VERIFY
+  maxPatternRate: 22727  # %VERIFY
+  dllPath: ''            # %VERIFY path to alp DLL on the scope PC
+  headerPath: ''         # %VERIFY path to alp.h on the scope PC
+  chunkSize: 250         # tune in Phase B from measured upload time
+  spotRadiusPx: 17
+
+laser:
+  ao_voltage_max: 5.0    # %VERIFY laser modulation input range
+  calibration_file: ''   # from tfp.calibration.powerMeterSweep (run_power_calibration)
+
+timing:
+  stimDurS: 0.010
+  itiMeanS: 0.15
+  itiJitterS: 0.05
+  preS: 0.05
+  postS: 0.15
+
+fov:
+  widthUm: 300
+  heightUm: 600
+  umPerDmdPx: 0.6        # %VERIFY measured scale at the sample plane
+  layerBoundariesUm: [0, 120, 300, 420, 600]  # %VERIFY layer edges for this prep
+
+ensemble:
+  nEnsembles: 3000
+  sizeMin: 5
+  sizeMax: 40
+  fillLevels: [0.25, 0.5, 0.75, 1.0]
+  nBlank: 100
+  nSingleCell: 0
+  laserVolts: 2.0        # %VERIFY against the power calibration
+  blocks: [CC, VC-70, VC+10]
+
+ppsf:
+  offsetsMaxUm: 75
+  nPointsPerHalfAxis: 5
+  laserVoltsLevels: [0.5, 1.0, 2.0, 4.0]  # %VERIFY against the power calibration
+  fillFactors: [0.25, 0.5, 0.75, 1.0]
+  nReps: 5
+  radiusPx: 17
+
+calibration_file: ''     # calibration containing dmdToScan_affine (run_dmd_scan_calibration)
+
+ui:
+  liveFigure: true

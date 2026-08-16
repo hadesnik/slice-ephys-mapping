@@ -1,0 +1,7 @@
+function p = dmd_repo_path_local()
+%dmd_repo_path_local Per-machine override for the DMD control repo location.
+%   Copy this file to dmd_repo_path_local.m (gitignored) and edit the path.
+%   sem_setup() calls it when present; otherwise the default sibling
+%   location ~/code/DMD-control-flow-software is used.
+p = '/Users/hillel/code/DMD-control-flow-software';
+end
