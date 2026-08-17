@@ -65,6 +65,7 @@ classdef AcqWindow < handle
         Listeners = event.listener.empty(1, 0)
         Sweeps = {}          % stored sweeps for the browser
         BrowseIdx = 0
+        TrendWindowMin = 10  % trend x-axis block, minutes (grows in whole blocks)
         IsShutdown (1,1) logical = false
         OwnsRig (1,1) logical = true
     end
@@ -113,6 +114,7 @@ classdef AcqWindow < handle
             obj.wire();
             obj.pushConfigToRunner();
             obj.refreshPreviews();
+            obj.applyTrendXLim(0);   % trends open on the first 10-minute block
             obj.setStatus('Idle');
         end
 
@@ -145,6 +147,29 @@ classdef AcqWindow < handle
         function d = sweepDir(obj)
             %sweepDir Where this session's sweeps are written.
             d = fullfile(obj.SavePathField.Value, obj.ExpNameField.Value);
+        end
+
+        function setHoldAxesLimits(obj, tf)
+            %setHoldAxesLimits Freeze the plot limits, as the checkbox does.
+            obj.HoldLimitsCheck.Value = logical(tf);
+        end
+
+        function ax = browseAxesForTest(obj)
+            ax = obj.BrowseAxes;
+        end
+
+        function ax = trendAxesForTest(obj)
+            ax = obj.RsAxes;
+        end
+
+        function setTrendSpanForTest(obj, elapsedMin)
+            %setTrendSpanForTest Apply the trend window for a given elapsed time.
+            obj.applyTrendXLim(elapsedMin);
+        end
+
+        function labels = leftAxisLabelsForTest(obj)
+            axesList = {obj.LiveAxes, obj.RsAxes, obj.IhAxes, obj.IrAxes, obj.BrowseAxes};
+            labels = cellfun(@(a) char(a.YLabel.String), axesList, 'UniformOutput', false);
         end
 
         function shutdown(obj)
@@ -301,12 +326,18 @@ classdef AcqWindow < handle
             col.Padding = [0 0 0 0];
             col.RowSpacing = 4;
 
+            % Every plot carries its units on the y axis; the clamp-mode switch
+            % updates the ones whose units depend on it.
             [obj.LivePanel, obj.LiveAxes] = axesPanel(col, 1, 'Whole Cell 1');
             xlabel(obj.LiveAxes, 'seconds');
+            ylabel(obj.LiveAxes, 'Im (pA)');
 
             [obj.RsPanel, obj.RsAxes] = axesPanel(col, 2, 'Rs (MOhm)');
+            ylabel(obj.RsAxes, 'MOhm');
             [obj.IhPanel, obj.IhAxes] = axesPanel(col, 3, 'Holding');
+            ylabel(obj.IhAxes, 'pA');
             [obj.IrPanel, obj.IrAxes] = axesPanel(col, 4, 'Rin (MOhm)');
+            ylabel(obj.IrAxes, 'MOhm');
             xlabel(obj.IrAxes, 'experiment time (min)');
 
             ctl = uigridlayout(col, [1 6]);
@@ -324,6 +355,7 @@ classdef AcqWindow < handle
 
             [obj.BrowsePanel, obj.BrowseAxes] = axesPanel(col, 6, 'Sweep browser');
             xlabel(obj.BrowseAxes, 'seconds');
+            ylabel(obj.BrowseAxes, 'Im (pA)');
         end
 
         function buildStimColumn(obj, body)
@@ -334,9 +366,12 @@ classdef AcqWindow < handle
             col.Padding = [0 0 0 0];
             col.RowSpacing = 6;
 
+            % Built-in defaults, overridden by anything the operator saved
+            % with "Save as defaults" on a previous session.
             ledDefaults = struct('amplitude', 0.4, 'pulseDurationMs', 500, ...
                 'nPulses', 3, 'frequencyHz', 10, 'startTimeMs', 1, ...
                 'amplitudeDeltaPerSweep', 0);
+            ledDefaults = mergeSaved(ledDefaults, sem.gui.stimDefaults('load', 'led'));
             obj.LedPanel = sem.gui.StimPanel(col, ...
                 'Title', 'LED / laser control (AO)', ...
                 'Channel', 'led', 'AmplitudeUnit', 'V', ...
@@ -350,6 +385,7 @@ classdef AcqWindow < handle
             cmdDefaults = struct('amplitude', 0, 'pulseDurationMs', 300, ...
                 'nPulses', 1, 'frequencyHz', 1, 'startTimeMs', 300, ...
                 'amplitudeDeltaPerSweep', 0);
+            cmdDefaults = mergeSaved(cmdDefaults, sem.gui.stimDefaults('load', 'command'));
             obj.CommandPanel = sem.gui.StimPanel(col, ...
                 'Title', 'Cell 1 command / current injection (AO)', ...
                 'Channel', 'command', 'AmplitudeUnit', 'mV', ...
@@ -485,11 +521,15 @@ classdef AcqWindow < handle
             if strcmp(mode, 'VC')
                 obj.CommandPanel.setAmplitudeUnit('mV');
                 ylabel(obj.LiveAxes, 'Im (pA)');
+                ylabel(obj.BrowseAxes, 'Im (pA)');
+                ylabel(obj.IhAxes, 'pA');
                 obj.IhPanel.Title = 'Holding (pA)';
                 s.amplitude = 0;
             else
                 obj.CommandPanel.setAmplitudeUnit('pA');
                 ylabel(obj.LiveAxes, 'Vm (mV)');
+                ylabel(obj.BrowseAxes, 'Vm (mV)');
+                ylabel(obj.IhAxes, 'mV');
                 obj.IhPanel.Title = 'Vrest (mV)';
                 s.amplitude = 200;
             end
@@ -538,10 +578,15 @@ classdef AcqWindow < handle
             obj.SweepLabel.Text = sprintf('sweep %d', n);
             obj.TimeLabel.Text = mmss(s.timeMin);
 
+            % Trend strips share a fixed time window that grows in whole blocks
+            % (0-10 min, then 0-20, ...). A window that rescaled to the data
+            % would flatten a slow drift into a horizontal line, which is
+            % exactly the thing these plots exist to reveal.
             x = obj.Runner.sweepTimeMin;
-            obj.RsLine = drawInto(obj.RsAxes, obj.RsLine, x, obj.Runner.rsMohm, false, 'o');
-            obj.IhLine = drawInto(obj.IhAxes, obj.IhLine, x, obj.Runner.holding, false, 'o');
-            obj.IrLine = drawInto(obj.IrAxes, obj.IrLine, x, obj.Runner.riMohm, false, 'o');
+            span = obj.trendSpan(max([x, 0]));
+            obj.RsLine = drawInto(obj.RsAxes, obj.RsLine, x, obj.Runner.rsMohm, false, 'o', [0, span]);
+            obj.IhLine = drawInto(obj.IhAxes, obj.IhLine, x, obj.Runner.holding, false, 'o', [0, span]);
+            obj.IrLine = drawInto(obj.IrAxes, obj.IrLine, x, obj.Runner.riMohm, false, 'o', [0, span]);
 
             obj.RsPanel.Title = numTitle('Rs', s.seal.rsMohm, 'MOhm');
             obj.IrPanel.Title = numTitle('Rin', s.seal.riMohm, 'MOhm');
@@ -610,12 +655,26 @@ classdef AcqWindow < handle
             obj.BrowseField.Value = idx;
             s = obj.Sweeps{idx};
             t = (0:numel(s.ai) - 1)' / s.sampleRateHz;
+
+            % Capture the current view BEFORE touching the axes: cla and plot
+            % both reset the limits, so a zoom the operator set by hand would
+            % otherwise be lost the moment they stepped to another sweep.
+            holdLimits = obj.HoldLimitsCheck.Value;
+            xl = xlim(obj.BrowseAxes);
+            yl = ylim(obj.BrowseAxes);
+
             if obj.HoldPlotCheck.Value
                 hold(obj.BrowseAxes, 'on');
                 plot(obj.BrowseAxes, t, s.ai);
             else
                 hold(obj.BrowseAxes, 'off');
                 obj.BrowseLineReset(t, s.ai);
+            end
+
+            if holdLimits
+                xlim(obj.BrowseAxes, xl);
+                ylim(obj.BrowseAxes, yl);
+            else
                 ylim(obj.BrowseAxes, sem.gui.paddedLimits(s.ai));
                 xlim(obj.BrowseAxes, [t(1), t(end)]);
             end
@@ -625,6 +684,19 @@ classdef AcqWindow < handle
         function BrowseLineReset(obj, t, y)
             cla(obj.BrowseAxes);
             plot(obj.BrowseAxes, t, y);
+        end
+
+        function s = trendSpan(obj, elapsedMin)
+            %trendSpan The trend x window: whole blocks of TrendWindowMin.
+            w = obj.TrendWindowMin;
+            s = w * max(1, ceil(elapsedMin / w));
+        end
+
+        function applyTrendXLim(obj, elapsedMin)
+            span = obj.trendSpan(elapsedMin);
+            xlim(obj.RsAxes, [0, span]);
+            xlim(obj.IhAxes, [0, span]);
+            xlim(obj.IrAxes, [0, span]);
         end
 
         function setStatus(obj, txt)
@@ -698,9 +770,12 @@ ax = uiaxes(g);
 ax.FontSize = 8;
 end
 
-function h = drawInto(ax, h, x, y, holdLimits, marker)
+function h = drawInto(ax, h, x, y, holdLimits, marker, fixedXLim)
 if nargin < 6
     marker = '-';
+end
+if nargin < 7
+    fixedXLim = [];
 end
 xl = xlim(ax); yl = ylim(ax);
 if isempty(h) || ~isvalid(h)
@@ -713,7 +788,9 @@ if holdLimits
 else
     % Never let the baseline sit on the axis edge, where it reads as missing.
     ylim(ax, sem.gui.paddedLimits(y));
-    if strcmp(marker, '-')
+    if ~isempty(fixedXLim)
+        xlim(ax, fixedXLim);
+    elseif strcmp(marker, '-')
         % Continuous trace: the sweep spans exactly its own duration.
         if numel(x) > 1 && x(end) > x(1)
             xlim(ax, [x(1), x(end)]);
@@ -759,6 +836,17 @@ end
 function f = numField(g, r, c, value, limits)
 f = uieditfield(g, 'numeric', 'Value', value, 'Limits', limits);
 f.Layout.Row = r; f.Layout.Column = c;
+end
+
+function d = mergeSaved(d, saved)
+%mergeSaved Overlay persisted defaults onto the built-in ones.
+if isempty(saved) || ~isstruct(saved)
+    return
+end
+f = fieldnames(saved);
+for k = 1:numel(f)
+    d.(f{k}) = saved.(f{k});
+end
 end
 
 function n = defaultExpName()

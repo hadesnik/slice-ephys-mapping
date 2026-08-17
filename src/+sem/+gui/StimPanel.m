@@ -72,9 +72,9 @@ classdef StimPanel < handle
             outer.RowSpacing = 4;
 
             % --- parameter rows ------------------------------------------
-            g = uigridlayout(outer, [8 2]);
+            g = uigridlayout(outer, [9 2]);
             g.Layout.Row = 1;
-            g.RowHeight = repmat({24}, 1, 8);
+            g.RowHeight = repmat({24}, 1, 9);
             g.ColumnWidth = {'1.35x', '1x'};
             g.Padding = [0 0 0 0];
             g.RowSpacing = 2;
@@ -113,6 +113,10 @@ classdef StimPanel < handle
                 'ButtonPushedFcn', @(~, ~) obj.onUpdate());
             b.FontWeight = 'bold';
 
+            uilabel(g, 'Text', '');   % spacer, keeps the save button right-aligned
+            uibutton(g, 'Text', 'Save as defaults', ...
+                'ButtonPushedFcn', @(~, ~) obj.onSaveDefaults());
+
             % --- preview --------------------------------------------------
             % The axes lives in its own 1x1 grid so it takes the full width it
             % is given and keeps room for its tick labels.
@@ -125,8 +129,8 @@ classdef StimPanel < handle
             ylabel(obj.PreviewAxes, obj.AmpUnit);
             title(obj.PreviewAxes, 'next sweep');
 
-            obj.StatusLabel = uilabel(g, 'Text', '');
-            obj.StatusLabel.Layout.Row = 8;
+            obj.StatusLabel = uilabel(g, 'Text', '', 'FontSize', 10);
+            obj.StatusLabel.Layout.Row = 9;
             obj.StatusLabel.Layout.Column = 1;
         end
 
@@ -220,6 +224,16 @@ classdef StimPanel < handle
     methods (Access = private)
         function txt = ampLabelText(obj)
             txt = sprintf('pulse amplitude (%s)', obj.AmpUnit);
+        end
+
+        function onSaveDefaults(obj)
+            %onSaveDefaults Persist the current fields as this rig's defaults.
+            try
+                sem.gui.stimDefaults('save', obj.Channel, obj.spec());
+                obj.setStatus('saved as defaults');
+            catch ME
+                obj.setStatus(ME.message);
+            end
         end
 
         function onUpdate(obj)

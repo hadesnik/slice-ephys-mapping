@@ -224,6 +224,89 @@ classdef test_acq_window < matlab.unittest.TestCase
                 'no string type may reach a saved field Python reads');
         end
 
+        function hold_axes_limits_survives_changing_sweep(tc)
+            % Zoom in on a sweep, tick Hold axes limits, step to another sweep:
+            % the view must stay put. cla and plot both reset the limits, so
+            % they have to be captured before the axes is touched.
+            tc.Win = tc.build();
+            for k = 1:3
+                tc.Win.Runner.acquireOne();
+            end
+            tc.Win.browseStep(+1);
+
+            ax = tc.Win.browseAxesForTest();
+            zoomX = [0.05 0.12];
+            zoomY = [100 200];
+            xlim(ax, zoomX); ylim(ax, zoomY);
+            tc.Win.setHoldAxesLimits(true);
+
+            tc.Win.browseStep(+1);   % next sweep
+
+            tc.verifyEqual(xlim(ax), zoomX, 'AbsTol', 1e-9, ...
+                'changing sweep discarded the held x limits');
+            tc.verifyEqual(ylim(ax), zoomY, 'AbsTol', 1e-9, ...
+                'changing sweep discarded the held y limits');
+
+            % Unticking lets it autoscale to the sweep again.
+            tc.Win.setHoldAxesLimits(false);
+            tc.Win.browseStep(-1);
+            tc.verifyNotEqual(xlim(ax), zoomX);
+        end
+
+        function trend_x_axis_grows_in_ten_minute_blocks(tc)
+            % A window that rescaled to the data would flatten a slow drift.
+            tc.Win = tc.build();
+            tc.Win.Runner.acquireOne();
+            rsAx = tc.Win.trendAxesForTest();
+            tc.verifyEqual(xlim(rsAx), [0 10], 'AbsTol', 1e-9);
+
+            % Fake a long session: the window steps to the next whole block.
+            tc.Win.setTrendSpanForTest(12.5);
+            tc.verifyEqual(xlim(rsAx), [0 20], 'AbsTol', 1e-9);
+            tc.Win.setTrendSpanForTest(21);
+            tc.verifyEqual(xlim(rsAx), [0 30], 'AbsTol', 1e-9);
+        end
+
+        function every_left_hand_plot_shows_its_units(tc)
+            tc.Win = tc.build();
+            labels = tc.Win.leftAxisLabelsForTest();
+            tc.verifyFalse(any(cellfun(@isempty, labels)), ...
+                'every plot on the left must name its units');
+
+            % And the mode-dependent ones follow the clamp mode.
+            tc.Win.setClampMode('IC');
+            labels = tc.Win.leftAxisLabelsForTest();
+            tc.verifyTrue(any(contains(labels, 'Vm (mV)')));
+            tc.Win.setClampMode('VC');
+            labels = tc.Win.leftAxisLabelsForTest();
+            tc.verifyTrue(any(contains(labels, 'Im (pA)')));
+        end
+
+        function save_as_defaults_round_trips(tc)
+            store = sem.gui.stimDefaults('path');
+            hadStore = isfile(store);
+            if hadStore
+                backup = [store '.testbak'];
+                copyfile(store, backup);
+                tc.addTeardown(@() movefile(backup, store));
+            else
+                tc.addTeardown(@() deleteIfPresent(store));
+            end
+
+            sem.gui.stimDefaults('save', 'led', struct('startTimeMs', 42, ...
+                'nPulses', 7, 'pulseDurationMs', 3, 'amplitude', 1.25, ...
+                'frequencyHz', 33));
+            got = sem.gui.stimDefaults('load', 'led');
+            tc.verifyEqual(got.amplitude, 1.25, 'AbsTol', 1e-9);
+            tc.verifyEqual(got.nPulses, 7);
+
+            % A new window opens with the saved values, not the built-ins.
+            tc.Win = tc.build();
+            s = tc.Win.LedPanel.spec();
+            tc.verifyEqual(s.amplitude, 1.25, 'AbsTol', 1e-9);
+            tc.verifyEqual(s.startTimeMs, 42, 'AbsTol', 1e-9);
+        end
+
         function shutdown_is_idempotent(tc)
             tc.Win = tc.build();
             fig = tc.Win.Figure;
@@ -263,4 +346,13 @@ classdef test_acq_window < matlab.unittest.TestCase
             t = string({l.Text});
         end
     end
+
+end
+
+% --- local helpers ---------------------------------------------------------
+
+function deleteIfPresent(p)
+if isfile(p)
+    delete(p);
+end
 end
