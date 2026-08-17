@@ -1,5 +1,5 @@
-classdef Round1_SealTest < matlab.unittest.TestCase
-    % Round1_SealTest  Tests for patchclamp.analysis.Seal.analyzeTrial.
+classdef test_seal_analysis_reference < matlab.unittest.TestCase
+    % test_seal_analysis_reference  Analytic reference tests for sem.analysis.sealAnalysis.
     %
     % Reference traces are constructed inline so the test does not depend on
     % FakeBackend (R1 Agent A).
@@ -18,9 +18,9 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             st = struct( ...
                 'amplitudeVcMv', -5, ...
                 'amplitudeIcPa', -100, ...
-                'preMs',         Round1_SealTest.PreMs, ...
-                'stepMs',        Round1_SealTest.StepMs, ...
-                'postMs',        Round1_SealTest.PostMs);
+                'preMs',         test_seal_analysis_reference.PreMs, ...
+                'stepMs',        test_seal_analysis_reference.StepMs, ...
+                'postMs',        test_seal_analysis_reference.PostMs);
         end
 
         function ai = buildVcReference(Rs_ref, Ri_ref, stepMv, holdingPa, ...
@@ -77,12 +77,12 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             holdingPa = -30;
             N = round(1.0 * fs);
             ai = holdingPa + 0.5 * randn(N, 1);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "VC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'VC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyEqual(result.holding, holdingPa, 'AbsTol', 1.0);
-            testCase.verifyEqual(result.holdingUnit, "pA");
-            testCase.verifyEqual(result.mode, "VC");
+            testCase.verifyEqual(result.holdingUnit, 'pA');
+            testCase.verifyEqual(result.mode, 'VC');
         end
 
         function testHoldingIc(testCase)
@@ -91,12 +91,12 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             restingMv = -65;
             N = round(1.0 * fs);
             ai = restingMv + 0.2 * randn(N, 1);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "IC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'IC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyEqual(result.holding, restingMv, 'AbsTol', 1.0);
-            testCase.verifyEqual(result.holdingUnit, "mV");
-            testCase.verifyEqual(result.mode, "IC");
+            testCase.verifyEqual(result.holdingUnit, 'mV');
+            testCase.verifyEqual(result.mode, 'IC');
         end
 
         function testRsRecoveryVc(testCase)
@@ -106,13 +106,13 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             Ri_ref = 200;    % MOhm
             stepMv = -5;
             holdingPa = -30;
-            ai = Round1_SealTest.buildVcReference(Rs_ref, Ri_ref, stepMv, holdingPa, ...
+            ai = test_seal_analysis_reference.buildVcReference(Rs_ref, Ri_ref, stepMv, holdingPa, ...
                 testCase.PreMs, testCase.StepMs, testCase.PostMs, testCase.TrailMs, ...
                 fs, testCase.TauMs, 0.05);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
             st.amplitudeVcMv = stepMv;
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "VC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'VC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyEqual(result.rsMohm, Rs_ref, 'RelTol', 0.10);
         end
 
@@ -123,24 +123,24 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             Ri_ref = 200;
             stepMv = -5;
             holdingPa = -30;
-            ai = Round1_SealTest.buildVcReference(Rs_ref, Ri_ref, stepMv, holdingPa, ...
+            ai = test_seal_analysis_reference.buildVcReference(Rs_ref, Ri_ref, stepMv, holdingPa, ...
                 testCase.PreMs, testCase.StepMs, testCase.PostMs, testCase.TrailMs, ...
                 fs, testCase.TauMs, 0.05);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
             st.amplitudeVcMv = stepMv;
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "VC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'VC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyEqual(result.riMohm, Ri_ref, 'RelTol', 0.05);
         end
 
         function testRsIsNaNInIc(testCase)
             rng(5);
             fs = testCase.Fs;
-            ai = Round1_SealTest.buildIcReference(150, -100, -65, ...
+            ai = test_seal_analysis_reference.buildIcReference(150, -100, -65, ...
                 testCase.PreMs, testCase.StepMs, testCase.PostMs, testCase.TrailMs, fs, 0.05);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "IC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'IC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyTrue(isnan(result.rsMohm));
         end
 
@@ -150,12 +150,12 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             Ri_ref = 150;       % MOhm
             stepPa = -100;
             restingMv = -65;
-            ai = Round1_SealTest.buildIcReference(Ri_ref, stepPa, restingMv, ...
+            ai = test_seal_analysis_reference.buildIcReference(Ri_ref, stepPa, restingMv, ...
                 testCase.PreMs, testCase.StepMs, testCase.PostMs, testCase.TrailMs, fs, 0.05);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
             st.amplitudeIcPa = stepPa;
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "IC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'IC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyEqual(result.riMohm, Ri_ref, 'RelTol', 0.05);
         end
 
@@ -163,13 +163,13 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             % Negative-amplitude step still yields positive Ri.
             rng(7);
             fs = testCase.Fs;
-            ai = Round1_SealTest.buildVcReference(20, 200, -5, -30, ...
+            ai = test_seal_analysis_reference.buildVcReference(20, 200, -5, -30, ...
                 testCase.PreMs, testCase.StepMs, testCase.PostMs, testCase.TrailMs, ...
                 fs, testCase.TauMs, 0.05);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
             st.amplitudeVcMv = -5;
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "VC", st, fs);
+            result = sem.analysis.sealAnalysis(ai, 'VC', sem.util.flattenSealTestCfg(st), fs);
             testCase.verifyGreaterThan(result.riMohm, 0);
             testCase.verifyGreaterThan(result.rsMohm, 0);
         end
@@ -179,12 +179,12 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             N = round(1.0 * fs);
             aiVc = zeros(N,1);
             aiIc = zeros(N,1);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
 
-            rVc = patchclamp.analysis.Seal.analyzeTrial(aiVc, "VC", st, fs);
-            rIc = patchclamp.analysis.Seal.analyzeTrial(aiIc, "IC", st, fs);
-            testCase.verifyEqual(rVc.holdingUnit, "pA");
-            testCase.verifyEqual(rIc.holdingUnit, "mV");
+            rVc = sem.analysis.sealAnalysis(aiVc, 'VC', sem.util.flattenSealTestCfg(st), fs);
+            rIc = sem.analysis.sealAnalysis(aiIc, 'IC', sem.util.flattenSealTestCfg(st), fs);
+            testCase.verifyEqual(rVc.holdingUnit, 'pA');
+            testCase.verifyEqual(rIc.holdingUnit, 'mV');
         end
 
         function testLayoutOverride(testCase)
@@ -199,10 +199,10 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             % Use double the default preMs so the default-computed indices
             % would land in the pre-step baseline rather than the step.
             preMs = 2 * testCase.PreMs;
-            ai = Round1_SealTest.buildVcReference(20, Ri_ref, stepMv, holdingPa, ...
+            ai = test_seal_analysis_reference.buildVcReference(20, Ri_ref, stepMv, holdingPa, ...
                 preMs, testCase.StepMs, testCase.PostMs, testCase.TrailMs, ...
                 fs, testCase.TauMs, 0.05);
-            st = Round1_SealTest.sealStruct();
+            st = test_seal_analysis_reference.sealStruct();
             st.amplitudeVcMv = stepMv;
             % NOTE: leave st.preMs at the default (50 ms); override via layout.
 
@@ -211,7 +211,7 @@ classdef Round1_SealTest < matlab.unittest.TestCase
             layout.sealTestStepStartIdx = round(preMs / 1000 * fs) + 1;
             layout.sealTestStepEndIdx   = round((preMs + testCase.StepMs) / 1000 * fs);
 
-            result = patchclamp.analysis.Seal.analyzeTrial(ai, "VC", st, fs, layout);
+            result = sem.analysis.sealAnalysis(ai, 'VC', sem.util.flattenSealTestCfg(st), fs, layout);
             testCase.verifyEqual(result.riMohm, Ri_ref, 'RelTol', 0.05);
         end
 

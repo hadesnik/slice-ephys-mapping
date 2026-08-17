@@ -38,15 +38,15 @@ classdef IntegrationR1_FakeBackendAndSeal < matlab.unittest.TestCase
             backend.configureTrial(ao0CellUnits, ao2Volts, "ai1", cfg.sampleRateHz, cfg.trialLengthSec);
             ai = backend.run();
 
-            result = patchclamp.analysis.Seal.analyzeTrial( ...
-                ai, mode, cfg.sealTest, cfg.sampleRateHz, layout);
+            result = sem.analysis.sealAnalysis( ...
+                ai, char(mode), sem.util.flattenSealTestCfg(cfg.sealTest), cfg.sampleRateHz, layout);
 
             % Ground-truth holding current at the cell in VC, in pA:
             % (Vhold - Vrest)/Rinput in mV/MOhm = nA -> *1000 -> pA.
             expectedHoldingPa = (backend.VholdMv - backend.VrestMv) / backend.RinputMOhm * 1000;
 
-            testCase.verifyEqual(result.mode, mode);
-            testCase.verifyEqual(result.holdingUnit, "pA");
+            testCase.verifyEqual(result.mode, char(mode));
+            testCase.verifyEqual(result.holdingUnit, 'pA');
             testCase.verifyEqual(result.holding, expectedHoldingPa, "AbsTol", 3);     % within 3 pA of ground truth
             testCase.verifyEqual(result.rsMohm,  backend.RsMOhm,     "RelTol", 0.10); % within 10% of ground truth
             testCase.verifyEqual(result.riMohm,  backend.RinputMOhm, "RelTol", 0.05); % within 5%
@@ -76,11 +76,11 @@ classdef IntegrationR1_FakeBackendAndSeal < matlab.unittest.TestCase
             backend.configureTrial(ao0CellUnits, ao2Volts, "ai1", cfg.sampleRateHz, cfg.trialLengthSec);
             ai = backend.run();
 
-            result = patchclamp.analysis.Seal.analyzeTrial( ...
-                ai, mode, cfg.sealTest, cfg.sampleRateHz, layout);
+            result = sem.analysis.sealAnalysis( ...
+                ai, char(mode), sem.util.flattenSealTestCfg(cfg.sealTest), cfg.sampleRateHz, layout);
 
-            testCase.verifyEqual(result.mode, mode);
-            testCase.verifyEqual(result.holdingUnit, "mV");
+            testCase.verifyEqual(result.mode, char(mode));
+            testCase.verifyEqual(result.holdingUnit, 'mV');
             testCase.verifyTrue(isnan(result.rsMohm), "Rs must be NaN in IC mode");
             testCase.verifyEqual(result.holding,  backend.VrestMv,    "AbsTol", 1.0);   % within 1 mV
             testCase.verifyEqual(result.riMohm,   backend.RinputMOhm, "RelTol", 0.05);  % within 5%
@@ -102,7 +102,7 @@ classdef IntegrationR1_FakeBackendAndSeal < matlab.unittest.TestCase
             [ao0CellUnits, ao2Volts, layout] = patchclamp.protocol.Trial.compose(cfg, mode);
             backend.configureTrial(ao0CellUnits, ao2Volts, "ai1", cfg.sampleRateHz, cfg.trialLengthSec);
             ai = backend.run();
-            seal = patchclamp.analysis.Seal.analyzeTrial(ai, mode, cfg.sealTest, cfg.sampleRateHz, layout);
+            seal = sem.analysis.sealAnalysis(ai, char(mode), sem.util.flattenSealTestCfg(cfg.sealTest), cfg.sampleRateHz, layout);
 
             trialResult = struct( ...
                 'aiCellUnits',        ai, ...

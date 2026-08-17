@@ -3,7 +3,7 @@ classdef ExperimentRunner < handle
     %
     % Wires the Round 1 components into a running session:
     %   protocol.Trial.compose  -> hardware.DAQ.configureTrial+run
-    %                           -> analysis.Seal.analyzeTrial
+    %                           -> sem.analysis.sealAnalysis
     %                           -> storage.Hdf5Writer.appendTrial
     %                           -> notify(TrialFinished)
     %                           -> (ITI gap) -> next trial
@@ -140,8 +140,14 @@ classdef ExperimentRunner < handle
                     obj.AiChannelName, cfg.sampleRateHz, cfg.trialLengthSec);
                 ai = obj.Daq.run();
 
-                seal = patchclamp.analysis.Seal.analyzeTrial( ...
-                    ai, mode, cfg.sealTest, cfg.sampleRateHz, layout);
+                % sem.analysis.sealAnalysis is the repo's single seal-test
+                % analyzer; it takes flat config keys and returns char, so
+                % flatten going in and restore string on the way out (the GUI
+                % panels compare and display these as strings).
+                seal = sem.analysis.sealAnalysis(ai, char(mode), ...
+                    sem.util.flattenSealTestCfg(cfg.sealTest), cfg.sampleRateHz, layout);
+                seal.mode        = string(seal.mode);
+                seal.holdingUnit = string(seal.holdingUnit);
 
                 trialResult = struct( ...
                     'aiCellUnits',        ai, ...
