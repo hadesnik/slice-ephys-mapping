@@ -7,6 +7,13 @@ classdef PulseTrainConfig
     %                     mV in VC for the command train; percent for opto)
     %   frequencyHz     : double scalar, > 0
     %   nPulses         : positive integer
+    %   startTimeMs     : double scalar, >= 0 — onset of the first pulse from
+    %                     sweep start. The acquisition GUI's stimulus panels
+    %                     expose this per channel so trains can be placed
+    %                     independently within a sweep.
+    %   amplitudeDeltaPerSweep : double scalar — per-sweep amplitude increment
+    %                     for stepped families (the F/I curve). Stepping is
+    %                     applied by sem.acq.SweepRunner, not here.
     %
     % validateFitsWindow() enforces that nPulses * (1/frequencyHz) is less than or
     % equal to the available stimulus window, which is the requirement called out in
@@ -18,7 +25,9 @@ classdef PulseTrainConfig
                 'pulseDurationMs', 5, ...
                 'amplitude',       50, ...
                 'frequencyHz',     20, ...
-                'nPulses',         10);
+                'nPulses',         10, ...
+                'startTimeMs',     0, ...
+                'amplitudeDeltaPerSweep', 0);
         end
 
         function validate(s)
@@ -49,6 +58,21 @@ classdef PulseTrainConfig
             mustBeScalarOrEmpty(s.nPulses);
             mustBePositive(s.nPulses);
             mustBeInteger(s.nPulses);
+
+            % Optional: absent in configs written before the acquisition GUI
+            % existed, so validate only when present rather than requiring them.
+            if isfield(s, "startTimeMs")
+                mustBeA(s.startTimeMs, "double");
+                mustBeScalarOrEmpty(s.startTimeMs);
+                mustBeNonnegative(s.startTimeMs);
+                mustBeFinite(s.startTimeMs);
+            end
+            if isfield(s, "amplitudeDeltaPerSweep")
+                mustBeA(s.amplitudeDeltaPerSweep, "double");
+                mustBeScalarOrEmpty(s.amplitudeDeltaPerSweep);
+                mustBeReal(s.amplitudeDeltaPerSweep);
+                mustBeFinite(s.amplitudeDeltaPerSweep);
+            end
         end
 
         function validateFitsWindow(s, stimulusWindowSec)
