@@ -38,6 +38,8 @@ classdef SliceEphysApp < handle
         ExperimentPanel   % sem.gui.ExperimentPanel
         BlockRunner       % sem.protocol.EpisodicRunner
         SessionDir
+        Targets = []      % mock only: the simulated slice
+        Model = []        % mock only: sem.sim.SliceNetworkModel
     end
 
     properties (Access = private)
@@ -63,6 +65,13 @@ classdef SliceEphysApp < handle
             if isempty(options.Rig)
                 [obj.Dmd, obj.Daq] = sem.hardware.makeRig(obj.Config);
                 obj.OwnsRig = true;
+                % A mock DAQ with no network model attached returns pure noise,
+                % so the membrane test would show nothing cell-like. Give a
+                % self-built mock rig simulated cells, matching what
+                % exp_ensemble_ei does for a mock session.
+                if strcmpi(sem.util.configField(obj.Config, 'hardwareKind', 'mock'), 'mock')
+                    obj.attachSimulatedCells();
+                end
             else
                 obj.Dmd = options.Rig{1};
                 obj.Daq = options.Rig{2};
@@ -172,6 +181,22 @@ classdef SliceEphysApp < handle
                 'Position', [0 0 1 1]);
             obj.PatchTab = uitab(obj.TabGroup, 'Title', 'Patch');
             obj.ExperimentTab = uitab(obj.TabGroup, 'Title', 'Experiment');
+        end
+
+        function attachSimulatedCells(obj)
+            %attachSimulatedCells Give the mock rig a simulated slice.
+            %   Builds mock targets, picks the most central cell as the patched
+            %   one and attaches the ground-truth network, so patch mode shows a
+            %   real RC response and mapping blocks produce real evoked currents.
+            targets = sem.targeting.mockTargets(obj.Config);
+            if isnan(targets.patchedCellId)
+                xy = reshape([targets.cells.dmdXY], 2, []).';
+                [~, k] = min(vecnorm(xy - mean(xy, 1), 2, 2));
+                targets.patchedCellId = targets.cells(k).id;
+            end
+            obj.Targets = targets;
+            obj.Model = sem.sim.makeGroundTruthNetwork(obj.Config, targets);
+            obj.Daq.attachNetworkModel(obj.Model);
         end
 
         function wireInterlock(obj)
