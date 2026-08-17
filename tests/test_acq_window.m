@@ -81,21 +81,48 @@ classdef test_acq_window < matlab.unittest.TestCase
             tc.verifyTrue(any(contains(titles, 'sweep 1')));
         end
 
-        function browser_follows_the_newest_sweep_and_navigates(tc)
+        function browser_is_independent_of_acquisition(tc)
+            % The browser is a review tool: acquiring must not yank the sweep
+            % being examined out from under the operator. The live trace above
+            % is what tracks acquisition.
             tc.Win = tc.build();
             for k = 1:3
                 tc.Win.Runner.acquireOne();
             end
-            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 3')));
+            tc.verifyFalse(any(contains(tc.panelTitles(), 'Sweep browser — sweep')), ...
+                'the browser must not jump to sweeps as they arrive');
 
-            tc.Win.browseStep(-1);
-            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 2')));
             tc.Win.browseStep(+1);
-            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 3')));
+            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 1')));
+            tc.Win.browseStep(+1);
+            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 2')));
+            tc.Win.browseStep(-1);
+            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 1')));
+
+            % Acquiring again leaves the browser where the operator put it.
+            tc.Win.Runner.acquireOne();
+            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 1')));
 
             % Past the ends it holds, rather than erroring (legacy behaviour).
-            tc.Win.browseStep(+5);
-            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 3')));
+            tc.Win.browseStep(-5);
+            tc.verifyTrue(any(contains(tc.panelTitles(), 'Sweep browser — sweep 1')));
+        end
+
+        function preview_limits_never_sit_on_the_trace(tc)
+            % A stimulus rests at 0 for most of the sweep; limits taken from
+            % min/max would put that baseline on the axis edge, hiding it.
+            lims = sem.gui.StimPanel.paddedLimits([0 0 0.4 0.4 0]');
+            tc.verifyLessThan(lims(1), 0);
+            tc.verifyGreaterThan(lims(2), 0.4);
+
+            % A negative-going command (the test pulse) is padded on both sides.
+            lims = sem.gui.StimPanel.paddedLimits([0 0 -5 -5 0]');
+            tc.verifyLessThan(lims(1), -5);
+            tc.verifyGreaterThan(lims(2), 0);
+
+            % An all-zero trace still gets a real span, not a degenerate one.
+            lims = sem.gui.StimPanel.paddedLimits(zeros(10, 1));
+            tc.verifyGreaterThan(lims(2), lims(1));
         end
 
         function panel_parameters_reach_the_composed_waveform(tc)

@@ -114,12 +114,12 @@ classdef StimPanel < handle
             b.FontWeight = 'bold';
 
             % --- preview --------------------------------------------------
-            % The axes is nested in a panel with a normalized position: a
-            % uiaxes placed straight into a uigridlayout row escapes the row.
-            axHost = uipanel(outer, 'BorderType', 'none');
+            % The axes lives in its own 1x1 grid so it takes the full width it
+            % is given and keeps room for its tick labels.
+            axHost = uigridlayout(outer, [1 1]);
             axHost.Layout.Row = 2;
-            obj.PreviewAxes = uiaxes(axHost, 'Units', 'normalized', ...
-                'Position', [0 0 1 1]);
+            axHost.Padding = [2 2 2 2];
+            obj.PreviewAxes = uiaxes(axHost);
             obj.PreviewAxes.FontSize = 8;
             xlabel(obj.PreviewAxes, 'seconds');
             ylabel(obj.PreviewAxes, obj.AmpUnit);
@@ -187,8 +187,7 @@ classdef StimPanel < handle
             if ~isempty(t)
                 xlim(obj.PreviewAxes, [t(1), t(end)]);
             end
-            pad = max(abs(wave)) * 0.15 + eps;
-            ylim(obj.PreviewAxes, [min(wave) - pad, max(wave) + pad]);
+            ylim(obj.PreviewAxes, sem.gui.StimPanel.paddedLimits(wave));
         end
 
         function pressUpdate(obj)
@@ -208,6 +207,13 @@ classdef StimPanel < handle
 
         function setStatus(obj, txt)
             obj.StatusLabel.Text = char(txt);
+        end
+    end
+
+    methods (Static)
+        function lims = paddedLimits(y)
+            %paddedLimits Y limits that never coincide with the data.
+            lims = sem.gui.paddedLimits(y);
         end
     end
 

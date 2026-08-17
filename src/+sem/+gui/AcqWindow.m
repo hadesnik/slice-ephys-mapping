@@ -520,10 +520,11 @@ classdef AcqWindow < handle
             if isempty(s)
                 return
             end
+            % The browser is a review tool, independent of acquisition: it
+            % moves only when the operator navigates, so a sweep being examined
+            % is not yanked away by the next one arriving. The live trace above
+            % is what tracks acquisition.
             obj.Sweeps{end+1} = s;
-            % Follow the newest sweep in the browser unless the operator is
-            % holding a plot to compare against it.
-            follow = ~obj.HoldPlotCheck.Value;
 
             fs = s.sampleRateHz;
             t = (0:numel(s.ai) - 1)' / fs;
@@ -556,9 +557,6 @@ classdef AcqWindow < handle
                     obj.LedPanel.setSpec(obj.Runner.config.led);
                 end
                 obj.refreshPreviews();
-            end
-            if follow
-                obj.showSweep(numel(obj.Sweeps));
             end
             drawnow limitrate;
         end
@@ -618,6 +616,8 @@ classdef AcqWindow < handle
             else
                 hold(obj.BrowseAxes, 'off');
                 obj.BrowseLineReset(t, s.ai);
+                ylim(obj.BrowseAxes, sem.gui.paddedLimits(s.ai));
+                xlim(obj.BrowseAxes, [t(1), t(end)]);
             end
             obj.BrowsePanel.Title = sprintf('Sweep browser — sweep %d (%s)', idx, s.mode);
         end
@@ -681,16 +681,20 @@ end
 % --- local helpers ---------------------------------------------------------
 
 function [p, ax] = axesPanel(parent, row, titleText)
-%axesPanel Axes nested in a titled panel.
-%   The nesting is required: a uiaxes placed directly into a uigridlayout row
-%   escapes the row and overdraws its neighbours. The title doubles as the
-%   numeric readout for the trend strips.
+%axesPanel Axes filling a titled panel.
+%   The axes goes inside a 1x1 uigridlayout rather than straight into the
+%   panel: a nested uipanel positioned [0 0 1 1] does NOT take its parent's
+%   size (it keeps the default ~260 px), which left every plot a fraction of
+%   its allocated width. A grid sizes its child to the panel and reserves room
+%   for the tick labels, so the plot no longer rides up into the panel title
+%   either. The title doubles as the numeric readout for the trend strips.
 p = uipanel(parent, 'Title', titleText, 'FontWeight', 'bold');
 p.Layout.Row = row;
-inner = uipanel(p, 'BorderType', 'none');
-inner.Units = 'normalized';
-inner.Position = [0 0 1 1];
-ax = uiaxes(inner, 'Units', 'normalized', 'Position', [0 0 1 1]);
+g = uigridlayout(p, [1 1]);
+g.Padding = [2 2 2 2];
+g.RowHeight = {'1x'};
+g.ColumnWidth = {'1x'};
+ax = uiaxes(g);
 ax.FontSize = 8;
 end
 
@@ -706,6 +710,19 @@ else
 end
 if holdLimits
     xlim(ax, xl); ylim(ax, yl);
+else
+    % Never let the baseline sit on the axis edge, where it reads as missing.
+    ylim(ax, sem.gui.paddedLimits(y));
+    if strcmp(marker, '-')
+        % Continuous trace: the sweep spans exactly its own duration.
+        if numel(x) > 1 && x(end) > x(1)
+            xlim(ax, [x(1), x(end)]);
+        end
+    else
+        % Trend markers: pad x too, or the first and last points are drawn
+        % half outside the plot box.
+        xlim(ax, sem.gui.paddedLimits(x, 0.05));
+    end
 end
 end
 
