@@ -28,6 +28,8 @@ classdef ConfigTelegraph < patchclamp.hardware.MultiClamp
     properties (Access = private)
         CurrentMode (1,1) string
         CurrentGain (1,1) struct
+        CurrentHoldingMv (1,1) double = 0
+        HoldingIsKnown (1,1) logical = false
     end
 
     methods
@@ -46,6 +48,7 @@ classdef ConfigTelegraph < patchclamp.hardware.MultiClamp
             eCfg = sem.util.configField(config, 'ephys', struct());
             obj.CurrentGain = sem.util.Units.gainFromConfig(eCfg);
             obj.CurrentMode = string(modeC);
+            obj.CurrentHoldingMv = sem.util.configField(eCfg, 'holdingVcEMv', -70);
         end
 
         function mode = getMode(obj)
@@ -54,6 +57,43 @@ classdef ConfigTelegraph < patchclamp.hardware.MultiClamp
 
         function gainStruct = getGain(obj)
             gainStruct = obj.CurrentGain;
+        end
+
+        function holdingMv = getHolding(obj)
+            %getHolding The holding the amplifier is applying, in cell units.
+            %
+            %   STAND-IN. With a real MccTelegraph this reads the Commander over
+            %   the AxMultiClampMsg link, which is the point: the experimenter
+            %   sets holding on the front panel and software only reports it.
+            %   Here there is no link, so this returns the last value software
+            %   was told about (config default, or whatever setHolding wrote).
+            %
+            %   isHoldingKnown() says which of those you are getting, so the GUI
+            %   can show a read value differently from an assumed one instead of
+            %   presenting a guess as a measurement.
+            holdingMv = obj.CurrentHoldingMv;
+        end
+
+        function tf = isHoldingKnown(obj)
+            %isHoldingKnown True once holding came from a read or an explicit set.
+            tf = obj.HoldingIsKnown;
+        end
+
+        function setHolding(obj, holdingMv)
+            %setHolding Command a new holding level (explicit operator request).
+            %   On the real rig this writes the Commander. Never called
+            %   implicitly: sweeps leave holding alone unless the operator
+            %   pressed one of the holding buttons.
+            if ~isnumeric(holdingMv) || ~isscalar(holdingMv) || ~isfinite(holdingMv)
+                error('sem:hardware:ConfigTelegraph:badHolding', ...
+                    'holdingMv must be a finite scalar.');
+            end
+            changed = ~obj.HoldingIsKnown || obj.CurrentHoldingMv ~= holdingMv;
+            obj.CurrentHoldingMv = double(holdingMv);
+            obj.HoldingIsKnown = true;
+            if changed
+                notify(obj, 'HoldingChanged');
+            end
         end
 
         function start(~)

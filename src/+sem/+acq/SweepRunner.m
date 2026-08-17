@@ -71,7 +71,6 @@ classdef SweepRunner < handle
         fs_
         expStartTic_ = []
         overrunWarned_ = false
-        lastHoldingMv_ = []   % holding the AO was last ramped to
     end
 
     methods
@@ -157,7 +156,6 @@ classdef SweepRunner < handle
             obj.lastSweep = [];
             obj.expStartTic_ = [];
             obj.overrunWarned_ = false;
-            obj.lastHoldingMv_ = [];
         end
 
         function [cellCmd, led, layout] = previewSweep(obj)
@@ -208,13 +206,13 @@ classdef SweepRunner < handle
             try
                 cfg = obj.effectiveConfig();
                 mode = obj.currentMode();
-                obj.ensureHolding(cfg, mode);
                 [cellCmd, led, layout] = sem.protocol.sweepWaveform(cfg, mode, obj.fs_);
 
                 obj.daq.configureTrial(cellCmd, led, "", obj.fs_, numel(cellCmd) / obj.fs_);
                 ai = obj.daq.run();
 
                 seal = sem.analysis.sealAnalysis(ai, mode, cfg, obj.fs_, layout);
+                holdingCmd = obj.amplifierHolding();
 
                 obj.sweepCount = obj.sweepCount + 1;
                 elapsedMin = toc(obj.expStartTic_) / 60;
@@ -234,7 +232,8 @@ classdef SweepRunner < handle
                     'seal',         seal, ...
                     'mode',         mode, ...
                     'sampleRateHz', obj.fs_, ...
-                    'timeMin',      elapsedMin);
+                    'timeMin',      elapsedMin, ...
+                    'holdingCommandMv', holdingCmd);
 
                 if ~isempty(obj.saveFcn)
                     obj.saveFcn(obj.lastSweep);
@@ -260,27 +259,20 @@ classdef SweepRunner < handle
             end
         end
 
-        function ensureHolding(obj, cfg, mode)
-            %ensureHolding Ramp the cell command to holding before sweeping.
-            %   The AO idles at 0 before the first sweep, so without this the
-            %   cell is stepped from 0 to holding in one jump: bad for the cell,
-            %   and it puts a huge capacitive transient in the first sweep that
-            %   corrupts the holding readout. Mirrors
-            %   sem.protocol.EpisodicRunner.rampHolding, which does the same at
-            %   block start.
-            h = sem.util.configField(cfg, 'holdingMv', 0);
-            if ~isempty(obj.lastHoldingMv_) && obj.lastHoldingMv_ == h
+        function h = amplifierHolding(obj)
+            %amplifierHolding What the Commander is holding the cell at.
+            %   Read, never commanded: the experimenter owns holding. Returns
+            %   NaN when the telegraph has no link to the amplifier, so the
+            %   record says "unknown" rather than inventing a number.
+            h = NaN;
+            if isempty(obj.telegraph) || ~ismethod(obj.telegraph, 'getHolding')
                 return
             end
-            from = 0;
-            if ~isempty(obj.lastHoldingMv_)
-                from = obj.lastHoldingMv_;
+            try
+                h = obj.telegraph.getHolding();
+            catch
+                h = NaN;   % telegraph present but no link to the Commander
             end
-            n = max(2, round(0.1 * obj.fs_));
-            ramp = linspace(from, h, n)';
-            obj.daq.configureTrial(ramp, zeros(n, 1), "", obj.fs_, n / obj.fs_);
-            obj.daq.run();          % not recorded: this is a settling move
-            obj.lastHoldingMv_ = h;
         end
 
         function applyStep(obj)

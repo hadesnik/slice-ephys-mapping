@@ -307,6 +307,88 @@ classdef test_acq_window < matlab.unittest.TestCase
             tc.verifyEqual(s.startTimeMs, 42, 'AbsTol', 1e-9);
         end
 
+        function holding_buttons_queue_and_apply_only_on_start(tc)
+            % The amplifier owns holding. Pressing a button must not change it
+            % under a sweep in flight - it queues a request that Start applies.
+            tc.Win = tc.build();
+            tc.Win.Telegraph.setHolding(-70);
+
+            tc.Win.requestHoldingForTest(10);
+            tc.verifyEqual(tc.Win.Telegraph.getHolding(), -70, 'AbsTol', 1e-9, ...
+                'the button must not write the amplifier immediately');
+
+            tc.Win.Runner.acquireOne();   % Start path applies the request
+            tc.verifyEqual(tc.Win.Telegraph.getHolding(), -70, 'AbsTol', 1e-9);
+
+            tc.Win.startForTest();
+            tc.Win.Runner.stop();
+            tc.verifyEqual(tc.Win.Telegraph.getHolding(), 10, 'AbsTol', 1e-9, ...
+                'Start must apply a queued holding request');
+        end
+
+        function start_leaves_holding_alone_when_no_button_was_pressed(tc)
+            % The whole point: software reads holding, it does not impose one.
+            tc.Win = tc.build();
+            tc.Win.Telegraph.setHolding(-55);
+
+            tc.Win.startForTest();
+            tc.Win.Runner.stop();
+
+            tc.verifyEqual(tc.Win.Telegraph.getHolding(), -55, 'AbsTol', 1e-9, ...
+                'Start must not overwrite the operator''s holding');
+            tc.verifyTrue(contains(tc.Win.holdingLabelForTest(), '-55'), ...
+                'the read-out must show what the amplifier reported');
+        end
+
+        function sweep_command_never_adds_holding(tc)
+            % A command that carried holding would double it against the
+            % amplifier's own. The command must rest at zero deviation.
+            tc.Win = tc.build();
+            tc.Win.Telegraph.setHolding(-70);
+            tc.Win.Runner.acquireOne();
+
+            s = tc.Win.Runner.lastSweep;
+            tc.verifyEqual(s.cellCmd(1), 0, 'AbsTol', 1e-9);
+            tc.verifyEqual(s.cellCmd(end), 0, 'AbsTol', 1e-9);
+            tc.verifyEqual(s.holdingCommandMv, -70, 'AbsTol', 1e-9);
+        end
+
+        function window_close_button_shuts_everything_down(tc)
+            % Hitting the window's close box must actually close it, releasing
+            % the DAQ, rather than leaving a dead window on screen.
+            tc.Win = tc.build();
+            fig = tc.Win.Figure;
+            close(fig);
+            tc.verifyFalse(isvalid(fig));
+        end
+
+        function closing_mid_run_stops_the_loop(tc)
+            % Closing while free-running must stop the sweep loop, not leave a
+            % timer firing into deleted widgets.
+            tc.Win = tc.build();
+            fig = tc.Win.Figure;
+            tc.Win.startForTest();
+            waitFor(@() tc.Win.Runner.sweepCount >= 1, 10);
+
+            close(fig);
+            pause(0.4);   % let any queued timer callback fire post-close
+
+            tc.verifyFalse(isvalid(fig));
+            tc.verifyEqual(tc.Win.Runner.state, 'Idle');
+        end
+
+        function closing_the_mapping_window_leaves_the_parent_open(tc)
+            tc.Win = tc.build();
+            tc.Win.openMapping();
+            mapFig = tc.Win.MappingWindow.Figure;
+
+            close(mapFig);
+
+            tc.verifyFalse(isvalid(mapFig));
+            tc.verifyTrue(isvalid(tc.Win.Figure), ...
+                'closing the mapping window must not close the acquisition window');
+        end
+
         function shutdown_is_idempotent(tc)
             tc.Win = tc.build();
             fig = tc.Win.Figure;
@@ -350,6 +432,13 @@ classdef test_acq_window < matlab.unittest.TestCase
 end
 
 % --- local helpers ---------------------------------------------------------
+
+function waitFor(predicate, timeoutS)
+t0 = tic;
+while ~predicate() && toc(t0) < timeoutS
+    pause(0.02);
+end
+end
 
 function deleteIfPresent(p)
 if isfile(p)

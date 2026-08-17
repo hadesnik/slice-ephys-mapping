@@ -120,10 +120,17 @@ for ONE patched cell instead of two.
   that separation is what lets a value be dialled in mid-run.
 - **One stepping mechanism** (`SweepRunner.stepSpec`) serves both the F/I
   current family and the LED parameter sweep.
-- **Holding is SOFTWARE-commanded in patch mode too** (Commander at 0), the
-  same convention the mapping blocks use, and `SweepRunner` ramps to it before
-  the first sweep. The two modes must not disagree: front-panel holding for
-  sweeps plus software holding for blocks would hold a -70 mV cell at -140.
+- **The AMPLIFIER owns holding in patch mode.** The experimenter sets it on the
+  MultiClamp Commander; software READS it to display and record, and writes it
+  only when the operator presses the -70 mV / +10 mV buttons. Those queue a
+  request that Start applies, so holding never changes under a sweep in flight.
+  Sweep commands are therefore DEVIATIONS from holding, resting at 0.
+  `MultiClamp.getHolding/setHolding` is the interface; `ConfigTelegraph` is a
+  stand-in until an `MccTelegraph` can really read the Commander, and
+  `isHoldingKnown()` distinguishes a read value from an assumed one.
+  ⚠️ **This differs from `EpisodicRunner`**, which still commands holding in
+  software and assumes the Commander sits at 0. Reconcile before running blocks
+  and sweeps against the same cell.
 - **Channels are configured ONCE per session** by `PatchDaqAdapter`.
   `NI6323_DAQ.configureAnalogInput` APPENDS to the legacy session and nothing
   removes channels; `MockEphysDAQ` assigns, so the mock cannot catch a

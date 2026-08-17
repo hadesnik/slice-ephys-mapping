@@ -48,21 +48,20 @@ classdef test_sweep_runner_mock < matlab.unittest.TestCase
             tc.verifyNumElements(runner.rsMohm, 1);
         end
 
-        function holding_is_ramped_before_the_first_sweep(tc)
-            % Without a ramp the cell is stepped from 0 to holding in one jump,
-            % which is bad for the cell and leaves a huge capacitive transient
-            % in the first sweep that corrupts the holding readout.
-            [runner, model] = tc.buildRunner('VC');
-            runner.config.holdingMv = -70;
+        function holding_is_read_from_the_amplifier_never_commanded(tc)
+            % The Commander holds the cell; the runner only reports what it is
+            % doing. Nothing software emits may add to that level.
+            [runner, ~] = tc.buildRunner('VC');
+            runner.telegraph.setHolding(-70);
 
             runner.acquireOne();
             s = runner.lastSweep;
 
-            expected = (-70 - model.params.vrestMv) / model.params.rinMohm * 1000;
-            tc.verifyEqual(s.seal.holding, expected, 'AbsTol', 8, ...
-                'the first sweep must open at holding, not step to it');
-            % No 1000s-of-pA onset artefact.
-            tc.verifyLessThan(max(abs(s.ai(1:50))), 500);
+            tc.verifyEqual(s.holdingCommandMv, -70, 'AbsTol', 1e-9, ...
+                'the sweep record must carry what the amplifier was holding at');
+            % The command itself rests at zero deviation.
+            tc.verifyEqual(s.cellCmd(1), 0, 'AbsTol', 1e-9);
+            tc.verifyEqual(s.cellCmd(end), 0, 'AbsTol', 1e-9);
         end
 
         function free_running_keeps_producing_sweeps(tc)

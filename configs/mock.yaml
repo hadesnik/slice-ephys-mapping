@@ -107,7 +107,6 @@ sweep:
   durationS: 1.0           # sweep length (s)
   isiS: 2.0                # ONSET-TO-ONSET period, not a gap
   testPulse: true          # membrane test in every sweep
-  holdingMv: -70           # SOFTWARE holding; Commander holding must be 0
   testPulseStartMs: 50     # where the test pulse sits in the sweep
   sealTestIsiS: 0.5        # faster repeat while in seal-test mode
   sealTestDurationS: 0.2   # short sweep while sealing
