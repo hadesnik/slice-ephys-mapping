@@ -94,3 +94,6 @@ calibration_file: ''     # calibration containing dmdToScan_affine (run_dmd_scan
 
 ui:
   liveFigure: true
+  patchSweepRateHz: 2      # membrane-test sweeps/s; the fixed 300 ms trial preamble caps this near 2.9
+  livePlotDecimation: 10   # plot every Nth sample in live traces
+  trialOverlayCount: 5     # overlaid sweeps in the trial plot

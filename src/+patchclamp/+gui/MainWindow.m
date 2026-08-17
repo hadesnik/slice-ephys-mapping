@@ -41,6 +41,8 @@ classdef MainWindow < handle
     properties (Access = private)
         Listeners        = event.listener.empty(1,0)
         IsShutdown (1,1) logical = false
+        Root                                  % container the panels are built into
+        OwnsFigure (1,1) logical = true       % false when embedded in a host window
     end
 
     methods
@@ -51,6 +53,7 @@ classdef MainWindow < handle
                 options.Writer    = []
                 options.Config    = patchclamp.config.TrialConfig.defaultConfig()
                 options.Visible   (1,1) string = "on"
+                options.Parent    = []
             end
 
             % Resolve telegraph + daq. If neither is supplied build a paired
@@ -76,7 +79,7 @@ classdef MainWindow < handle
             obj.Writer    = options.Writer;
             obj.Config    = options.Config;
 
-            obj.buildFigure(options.Visible);
+            obj.buildFigure(options.Visible, options.Parent);
             obj.buildPanels();
 
             obj.Runner = patchclamp.acquisition.ExperimentRunner( ...
@@ -100,7 +103,11 @@ classdef MainWindow < handle
             obj.OptoEditorPanel.setStimulusWindowSec(w);
             obj.CommandEditorPanel.setStimulusWindowSec(w);
 
-            obj.Figure.CloseRequestFcn = @(~,~) obj.shutdown();
+            % Only claim the close request when we created the figure; when
+            % embedded, the host window owns its own lifecycle.
+            if obj.OwnsFigure
+                obj.Figure.CloseRequestFcn = @(~,~) obj.shutdown();
+            end
         end
 
         function shutdown(obj)
@@ -148,7 +155,7 @@ classdef MainWindow < handle
             end
 
             try
-                if ~isempty(obj.Figure) && isvalid(obj.Figure)
+                if obj.OwnsFigure && ~isempty(obj.Figure) && isvalid(obj.Figure)
                     delete(obj.Figure);
                 end
             catch
@@ -161,11 +168,23 @@ classdef MainWindow < handle
     end
 
     methods (Access = private)
-        function buildFigure(obj, visible)
+        function buildFigure(obj, visible, parent)
+            if ~isempty(parent)
+                % Embedded: sem.gui.SliceEphysApp hosts this panel set inside a
+                % tab so patch mode and experiment mode share one window. The
+                % host owns the figure, its Visible state and its close request.
+                obj.Root = parent;
+                obj.Figure = ancestor(parent, 'figure');
+                obj.OwnsFigure = false;
+                return
+            end
+
             obj.Figure = uifigure( ...
                 "Name", "patchclamp acquisition", ...
                 "Position", [100 100 1400 900], ...
                 "Visible", visible);
+            obj.Root = obj.Figure;
+            obj.OwnsFigure = true;
 
             % Debug menu: the v1 affordance for flipping the FakeTelegraph
             % mode + nudging the gain. R4 will get these signals naturally
@@ -178,7 +197,7 @@ classdef MainWindow < handle
         end
 
         function buildPanels(obj)
-            outer = uigridlayout(obj.Figure, [1 3]);
+            outer = uigridlayout(obj.Root, [1 3]);
             outer.ColumnWidth = {350, '1x', 260};
             outer.RowHeight   = {'1x'};
             outer.Padding     = [6 6 6 6];
