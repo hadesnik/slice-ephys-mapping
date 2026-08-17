@@ -236,7 +236,7 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
                     'configureAnalogInput() required first.');
             end
             nChans = numel(obj.configuredAiChannels_);
-            data = randn(nSamples, nChans) * 0.01;
+            data = obj.synthesizeFinite(nSamples, nChans);
             obj.logEvent('readAnalogInput', struct('nSamples', nSamples, 'nChans', nChans));
         end
 
@@ -443,6 +443,45 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
     end
 
     methods (Access = private)
+        function data = synthesizeFinite(obj, nSamples, nChans)
+            %synthesizeFinite Ground-truth AI for one finite trial (DAQ volts).
+            %   The per-trial finite path (configureAnalogOutput/queueAnalogOutput/
+            %   start/readAnalogInput) is what the patching GUI's membrane test
+            %   runs on, so it has to produce a real RC response and not just
+            %   noise — otherwise patch mode cannot be developed against the mock.
+            %   Same physics as synthesizeSession, minus the multi-event session
+            %   reconstruction: one queued waveform, one window.
+            data = randn(nSamples, nChans) * 0.01;   % no model: bare noise, as before
+
+            if isempty(obj.model_)
+                return
+            end
+            scaledCol = find(obj.configuredAiChannels_ == obj.aiScaledChan_, 1);
+            if isempty(scaledCol)
+                return   % scaled output not acquired; nothing to synthesize
+            end
+
+            % Command trace in volts. The AO line holds its last written sample
+            % once the queued waveform runs out (mirrors the NI AO idle).
+            cmdVolts = zeros(nSamples, 1);
+            cellCol = find(obj.configuredAoChannels_ == obj.aoCellCmdChan_, 1);
+            if ~isempty(obj.queuedAo_) && ~isempty(cellCol)
+                w = obj.queuedAo_(:, cellCol);
+                n = min(numel(w), nSamples);
+                cmdVolts(1:n) = w(1:n);
+                if n < nSamples
+                    cmdVolts(n+1:end) = w(n);
+                end
+            end
+
+            mode = obj.clampState_.mode;
+            gain = obj.model_.gain;
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain);
+            aiCell  = obj.model_.synthesizePassive(cmdCell, mode, obj.sampleRate);
+            aiCell  = aiCell + obj.model_.drawNoise(nSamples, mode);
+            data(:, scaledCol) = sem.util.Units.scaledCellToDaqVolts(aiCell, mode, gain);
+        end
+
         function aiData = synthesizeSession(obj, snap, nS)
             %synthesizeSession Ground-truth AI for the whole session (DAQ volts).
             fs = snap.sampleRate;
