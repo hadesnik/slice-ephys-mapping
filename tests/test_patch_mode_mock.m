@@ -76,6 +76,58 @@ classdef test_patch_mode_mock < matlab.unittest.TestCase
             tc.verifyEqual(queued(end).payload.nSamples, n);
         end
 
+        function channels_are_configured_once_not_per_sweep(tc)
+            % tfp.hardware.NI6323_DAQ's configureAnalogInput/Output APPEND to
+            % the legacy session and nothing removes channels, so reconfiguring
+            % per sweep doubles the channel count each time and the AO width
+            % stops matching the queued data within two sweeps. The mock assigns
+            % rather than appends, so it cannot fail on its own - the call count
+            % is what has to be pinned.
+            cfg = tc.mockConfig();
+            [daq, ~] = tc.buildDaq(cfg);
+            telegraph = sem.hardware.ConfigTelegraph(cfg, 'VC');
+            adapter = sem.hardware.PatchDaqAdapter(daq, cfg, telegraph);
+
+            n = 100;
+            for k = 1:4
+                adapter.configureTrial(zeros(n, 1), zeros(n, 1), "ai0", 20000, n / 20000);
+                adapter.run();
+            end
+
+            entries = daq.getLog();
+            nAi = nnz(strcmp({entries.eventType}, 'configureAnalogInput'));
+            nAo = nnz(strcmp({entries.eventType}, 'configureAnalogOutput'));
+            nQueued = nnz(strcmp({entries.eventType}, 'queueAnalogOutput'));
+
+            tc.verifyEqual(nAi, 1, 'AI channels must be configured once per session');
+            tc.verifyEqual(nAo, 1, 'AO channels must be configured once per session');
+            tc.verifyEqual(nQueued, 4, 'every sweep must still queue its own waveform');
+
+            % cleanup() releases the task on real hardware, so the next session
+            % has to add its channels again.
+            adapter.cleanup();
+            adapter.configureTrial(zeros(n, 1), zeros(n, 1), "ai0", 20000, n / 20000);
+            entries = daq.getLog();
+            tc.verifyEqual(nnz(strcmp({entries.eventType}, 'configureAnalogInput')), 2);
+        end
+
+        function single_ended_channels_are_passed_through(tc)
+            % The legacy rig read its amplifier lines single-ended; reading them
+            % differentially gives the wrong signal.
+            cfg = tc.mockConfig();
+            cfg.daq.aiSingleEndedChannels = [0 1];
+            [daq, ~] = tc.buildDaq(cfg);
+            adapter = sem.hardware.PatchDaqAdapter(daq, cfg);
+
+            n = 50;
+            adapter.configureTrial(zeros(n, 1), zeros(n, 1), "ai0", 20000, n / 20000);
+
+            entries = daq.getLog();
+            cfgAi = entries(strcmp({entries.eventType}, 'configureAnalogInput'));
+            tc.assertNotEmpty(cfgAi);
+            tc.verifyEqual(cfgAi(end).payload.singleEnded, [0 1]);
+        end
+
         function adapter_requires_configure_before_run(tc)
             cfg = tc.mockConfig();
             [daq, ~] = tc.buildDaq(cfg);

@@ -55,6 +55,7 @@ classdef PatchDaqAdapter < patchclamp.hardware.DAQ
         configured_ = false
         trialMode_ = 'VC'
         trialGain_ = []
+        channelsConfigured_ = false
     end
 
     methods
@@ -146,10 +147,7 @@ classdef PatchDaqAdapter < patchclamp.hardware.DAQ
             obj.trialMode_ = mode;
             obj.trialGain_ = gain;
 
-            aiRangeV = sem.util.configField( ...
-                sem.util.configField(obj.config, 'daq', struct()), 'aiRangeV', [-10, 10]);
-            obj.daq.configureAnalogInput(obj.aiChannels_, aiRangeV, []);
-            obj.daq.configureAnalogOutput(obj.aoChannels_);
+            obj.ensureChannelsConfigured();
             obj.daq.queueAnalogOutput(ao);
             obj.configured_ = true;
         end
@@ -179,10 +177,39 @@ classdef PatchDaqAdapter < patchclamp.hardware.DAQ
             end
             obj.configured_ = false;
             obj.queuedAo_ = [];
+            % The next session must add its channels again; on real hardware
+            % cleanup() releases the task, taking the channels with it.
+            obj.channelsConfigured_ = false;
         end
     end
 
     methods (Access = private)
+        function ensureChannelsConfigured(obj)
+            %ensureChannelsConfigured Add the AI/AO channels ONCE per session.
+            %   tfp.hardware.NI6323_DAQ's configureAnalogInput/Output APPEND to
+            %   the legacy session (addAnalogInputChannel) and nothing removes
+            %   channels short of release(). Calling them per sweep therefore
+            %   doubles the channel count every sweep and the AO width stops
+            %   matching the queued data within two sweeps.
+            %
+            %   sem.hardware.MockEphysDAQ assigns rather than appends, so the
+            %   mock cannot surface this — tests/test_patch_mode_mock.m pins the
+            %   call count through getLog() instead.
+            if obj.channelsConfigured_
+                return
+            end
+            dCfg = sem.util.configField(obj.config, 'daq', struct());
+            aiRangeV = sem.util.configField(dCfg, 'aiRangeV', [-10, 10]);
+            % The scaled output is a single-ended line on this rig class; the
+            % legacy acquisition set InputType='SingleEnded' on its AI channels
+            % and reading them differentially gives the wrong signal.
+            singleEnded = sem.util.configField(dCfg, 'aiSingleEndedChannels', []);
+
+            obj.daq.configureAnalogInput(obj.aiChannels_, aiRangeV, singleEnded);
+            obj.daq.configureAnalogOutput(obj.aoChannels_);
+            obj.channelsConfigured_ = true;
+        end
+
         function [mode, gain] = latchModeAndGain(obj)
             %latchModeAndGain Mode/gain for this trial; telegraph is authoritative.
             if isempty(obj.telegraph)

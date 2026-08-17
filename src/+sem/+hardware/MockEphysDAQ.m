@@ -58,6 +58,7 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
         continuousFinalSampleCount_ = uint64(0)
         continuousEverStarted_ = false
         sessionClampMode_ = ''
+        lastFiniteCmdVolts_ = 0   % AO idle level carried between finite sweeps
     end
 
     methods
@@ -140,8 +141,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             events = obj.events_;
         end
 
-        function configureAnalogInput(obj, channels, rangeV, ~)
+        function configureAnalogInput(obj, channels, rangeV, singleEndedChannels)
             obj.requireInitialized('configureAnalogInput');
+            if nargin < 4
+                singleEndedChannels = [];
+            end
             if ~all(ismember(channels, obj.analogInChannels))
                 error('sem:hardware:MockEphysDAQ:badChannels', ...
                     'channels must be a subset of analogInChannels = [%s]; got [%s].', ...
@@ -149,7 +153,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             end
             obj.configuredAiChannels_ = channels;
             obj.aiRangeV_ = rangeV;
-            obj.logEvent('configureAnalogInput', struct('channels', channels, 'rangeV', rangeV));
+            % Logged so callers can be checked against the real DAQ's contract:
+            % NI6323_DAQ sets InputType='SingleEnded' on these, and dropping the
+            % argument silently reads the amplifier differentially.
+            obj.logEvent('configureAnalogInput', struct('channels', channels, ...
+                'rangeV', rangeV, 'singleEnded', singleEndedChannels));
         end
 
         function configureAnalogOutput(obj, channels)
@@ -538,10 +546,23 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
 
             mode = obj.clampState_.mode;
             gain = obj.model_.gain;
-            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain);
-            aiCell  = obj.model_.synthesizePassive(cmdCell, mode, obj.sampleRate);
+
+            % The AO idles at its last written sample between sweeps, so the
+            % cell arrives at the next sweep ALREADY at that level. Prepend a
+            % settling segment at the carried-over level and trim it, otherwise
+            % every sweep opens with a spurious capacitive transient from 0 to
+            % holding -- which would swamp the trace and make the holding
+            % readout (mean of the first samples) meaningless.
+            nSettle = max(1, round(0.05 * obj.sampleRate));
+            cmdFull = [repmat(obj.lastFiniteCmdVolts_, nSettle, 1); cmdVolts];
+
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdFull, mode, gain);
+            aiFull  = obj.model_.synthesizePassive(cmdCell, mode, obj.sampleRate);
+            aiCell  = aiFull(nSettle + 1:end);
             aiCell  = aiCell + obj.model_.drawNoise(nSamples, mode);
             data(:, scaledCol) = sem.util.Units.scaledCellToDaqVolts(aiCell, mode, gain);
+
+            obj.lastFiniteCmdVolts_ = cmdVolts(end);
         end
 
         function seg = synthesizeWindow(obj, snap, j0, j1)

@@ -120,6 +120,14 @@ for ONE patched cell instead of two.
   that separation is what lets a value be dialled in mid-run.
 - **One stepping mechanism** (`SweepRunner.stepSpec`) serves both the F/I
   current family and the LED parameter sweep.
+- **Holding is SOFTWARE-commanded in patch mode too** (Commander at 0), the
+  same convention the mapping blocks use, and `SweepRunner` ramps to it before
+  the first sweep. The two modes must not disagree: front-panel holding for
+  sweeps plus software holding for blocks would hold a -70 mV cell at -140.
+- **Channels are configured ONCE per session** by `PatchDaqAdapter`.
+  `NI6323_DAQ.configureAnalogInput` APPENDS to the legacy session and nothing
+  removes channels; `MockEphysDAQ` assigns, so the mock cannot catch a
+  per-sweep reconfigure. The call count is pinned by a test instead.
 - **Seal test is inline**: a mode of the same loop with the stimulus stripped,
   so the trends keep filling. Rs / Rin / holding are numeric readouts in the
   trend-strip titles — the legacy GUI had numbers only in a separate window.

@@ -71,6 +71,7 @@ classdef SweepRunner < handle
         fs_
         expStartTic_ = []
         overrunWarned_ = false
+        lastHoldingMv_ = []   % holding the AO was last ramped to
     end
 
     methods
@@ -156,6 +157,7 @@ classdef SweepRunner < handle
             obj.lastSweep = [];
             obj.expStartTic_ = [];
             obj.overrunWarned_ = false;
+            obj.lastHoldingMv_ = [];
         end
 
         function [cellCmd, led, layout] = previewSweep(obj)
@@ -206,6 +208,7 @@ classdef SweepRunner < handle
             try
                 cfg = obj.effectiveConfig();
                 mode = obj.currentMode();
+                obj.ensureHolding(cfg, mode);
                 [cellCmd, led, layout] = sem.protocol.sweepWaveform(cfg, mode, obj.fs_);
 
                 obj.daq.configureTrial(cellCmd, led, "", obj.fs_, numel(cellCmd) / obj.fs_);
@@ -255,6 +258,29 @@ classdef SweepRunner < handle
             if scheduleNext && strcmp(obj.state, 'Running')
                 obj.armTimer(toc(sweepTic));
             end
+        end
+
+        function ensureHolding(obj, cfg, mode)
+            %ensureHolding Ramp the cell command to holding before sweeping.
+            %   The AO idles at 0 before the first sweep, so without this the
+            %   cell is stepped from 0 to holding in one jump: bad for the cell,
+            %   and it puts a huge capacitive transient in the first sweep that
+            %   corrupts the holding readout. Mirrors
+            %   sem.protocol.EpisodicRunner.rampHolding, which does the same at
+            %   block start.
+            h = sem.util.configField(cfg, 'holdingMv', 0);
+            if ~isempty(obj.lastHoldingMv_) && obj.lastHoldingMv_ == h
+                return
+            end
+            from = 0;
+            if ~isempty(obj.lastHoldingMv_)
+                from = obj.lastHoldingMv_;
+            end
+            n = max(2, round(0.1 * obj.fs_));
+            ramp = linspace(from, h, n)';
+            obj.daq.configureTrial(ramp, zeros(n, 1), "", obj.fs_, n / obj.fs_);
+            obj.daq.run();          % not recorded: this is a settling move
+            obj.lastHoldingMv_ = h;
         end
 
         function applyStep(obj)

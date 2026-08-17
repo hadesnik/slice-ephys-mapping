@@ -142,6 +142,45 @@ classdef test_sweep_waveform < matlab.unittest.TestCase
                 'sem:protocol:sweepWaveform:badMode');
         end
 
+        function holding_is_commanded_in_software(tc)
+            % Patch sweeps command holding themselves, the same convention the
+            % mapping blocks use. If sweeps left holding to the amplifier front
+            % panel while blocks commanded it in software, patching at -70 mV
+            % and then starting a block would hold the cell at -140.
+            fs = 20000;
+            cfg = tc.sweepCfg();
+            cfg.holdingMv = -70;
+            [cmd, ~, layout] = sem.protocol.sweepWaveform(cfg, 'VC', fs);
+
+            tc.verifyEqual(layout.holdingMv, -70);
+            % Starts at holding...
+            tc.verifyEqual(cmd(1), -70, 'AbsTol', 1e-9);
+            % ...the test pulse rides on it, not replacing it...
+            tc.verifyEqual(min(cmd), -75, 'AbsTol', 1e-9);
+            % ...and it ENDS at holding, because the NI AO idles at its last
+            % written sample and that is what holds the cell between sweeps.
+            tc.verifyEqual(cmd(end), -70, 'AbsTol', 1e-9);
+        end
+
+        function holding_defaults_to_zero(tc)
+            % Absent holding is 0, which is also the correct current-clamp value.
+            cfg = tc.sweepCfg();
+            cmd = sem.protocol.sweepWaveform(cfg, 'IC', 20000);
+            tc.verifyEqual(cmd(1), 0, 'AbsTol', 1e-9);
+            tc.verifyEqual(cmd(end), 0, 'AbsTol', 1e-9);
+        end
+
+        function command_train_rides_on_holding(tc)
+            fs = 20000;
+            cfg = tc.sweepCfg();
+            cfg.holdingMv = -70;
+            cfg.command = struct('startTimeMs', 300, 'nPulses', 1, ...
+                'pulseDurationMs', 50, 'amplitude', 20, 'frequencyHz', 1);
+            cmd = sem.protocol.sweepWaveform(cfg, 'VC', fs);
+            tc.verifyEqual(max(cmd), -50, 'AbsTol', 1e-9, ...
+                'a +20 mV step from -70 mV holding must reach -50 mV');
+        end
+
         % --- the loop that matters -----------------------------------------
 
         function composed_sweep_recovers_ground_truth_rs_and_rin(tc)

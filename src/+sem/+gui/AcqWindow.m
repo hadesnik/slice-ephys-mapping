@@ -46,7 +46,7 @@ classdef AcqWindow < handle
     properties (Access = private)
         % run controls
         StartBtn; StopBtn; PauseBtn
-        IsiField; DurField; ModeDrop; TestPulseCheck
+        IsiField; DurField; ModeDrop; TestPulseCheck; HoldField; HoldLabel
         SweepLabel; TimeLabel; StatusLabel
         SavePathField; ExpNameField; SaveEachCheck
         SealBtn; FiBtn
@@ -238,9 +238,9 @@ classdef AcqWindow < handle
         function buildTopStrip(obj, root)
             strip = uipanel(root, 'BorderType', 'none');
             strip.Layout.Row = 1;
-            g = uigridlayout(strip, [2 14]);
+            g = uigridlayout(strip, [2 16]);
             g.RowHeight = {30, 26};
-            g.ColumnWidth = {70, 70, 70, 40, 60, 60, 60, 90, 110, 80, 90, 90, 90, '1x'};
+            g.ColumnWidth = {70, 70, 70, 40, 60, 45, 60, 55, 60, 90, 100, 78, 78, 78, 82, '1x'};
             g.Padding = [0 0 0 0];
             g.ColumnSpacing = 4;
             g.RowSpacing = 4;
@@ -271,51 +271,59 @@ classdef AcqWindow < handle
             obj.DurField = numField(g, 1, 7, ...
                 sem.util.configField(c, 'durationS', 1.0), [1e-3 Inf]);
 
+            % Holding is commanded in SOFTWARE (the Commander must sit at 0),
+            % the same convention the mapping blocks use.
+            obj.HoldLabel = uilabel(g, 'Text', 'hold (mV)');
+            obj.HoldLabel.Layout.Row = 1; obj.HoldLabel.Layout.Column = 8;
+            obj.HoldField = numField(g, 1, 9, ...
+                sem.util.configField(c, 'holdingMv', -70), [-Inf Inf]);
+            obj.HoldField.ValueChangedFcn = @(~, ~) obj.pushAndPreview();
+
             obj.ModeDrop = uidropdown(g, 'Items', {'Voltage Clamp', 'Current Clamp'}, ...
                 'ValueChangedFcn', @(~, ~) obj.onModeChanged());
-            obj.ModeDrop.Layout.Row = 1; obj.ModeDrop.Layout.Column = 8;
+            obj.ModeDrop.Layout.Row = 1; obj.ModeDrop.Layout.Column = 10;
 
             obj.TestPulseCheck = uicheckbox(g, 'Text', 'TestPulse', ...
                 'Value', logical(sem.util.configField(c, 'testPulse', true)), ...
                 'ValueChangedFcn', @(~, ~) obj.pushAndPreview());
-            obj.TestPulseCheck.Layout.Row = 1; obj.TestPulseCheck.Layout.Column = 9;
+            obj.TestPulseCheck.Layout.Row = 1; obj.TestPulseCheck.Layout.Column = 11;
 
             obj.SealBtn = uibutton(g, 'state', 'Text', 'Seal test', ...
                 'ValueChangedFcn', @(s, ~) obj.onSealMode(s.Value));
-            obj.SealBtn.Layout.Row = 1; obj.SealBtn.Layout.Column = 10;
+            obj.SealBtn.Layout.Row = 1; obj.SealBtn.Layout.Column = 12;
 
             obj.FiBtn = uibutton(g, 'state', 'Text', 'F/I family', ...
                 'ValueChangedFcn', @(~, ~) obj.pushConfigToRunner());
-            obj.FiBtn.Layout.Row = 1; obj.FiBtn.Layout.Column = 11;
+            obj.FiBtn.Layout.Row = 1; obj.FiBtn.Layout.Column = 13;
 
             b = uibutton(g, 'Text', 'Single', ...
                 'ButtonPushedFcn', @(~, ~) obj.onSingle());
-            b.Layout.Row = 1; b.Layout.Column = 12;
+            b.Layout.Row = 1; b.Layout.Column = 14;
 
             b = uibutton(g, 'Text', 'Mapping…', 'BackgroundColor', [0.55 0.80 0.85], ...
                 'ButtonPushedFcn', @(~, ~) obj.onMapping());
-            b.Layout.Row = 1; b.Layout.Column = 13;
+            b.Layout.Row = 1; b.Layout.Column = 15;
 
             % --- second row: identity + counters
             lab(g, 2, 1, 'Save path');
             obj.SavePathField = uieditfield(g, 'text', 'Value', obj.SessionDir);
-            obj.SavePathField.Layout.Row = 2; obj.SavePathField.Layout.Column = [2 5];
+            obj.SavePathField.Layout.Row = 2; obj.SavePathField.Layout.Column = [2 6];
 
-            lab(g, 2, 6, 'Exp. name');
+            lab(g, 2, 7, 'Exp. name');
             obj.ExpNameField = uieditfield(g, 'text', 'Value', defaultExpName());
-            obj.ExpNameField.Layout.Row = 2; obj.ExpNameField.Layout.Column = [7 8];
+            obj.ExpNameField.Layout.Row = 2; obj.ExpNameField.Layout.Column = [8 9];
 
             obj.SaveEachCheck = uicheckbox(g, 'Text', 'save each sweep', 'Value', true);
-            obj.SaveEachCheck.Layout.Row = 2; obj.SaveEachCheck.Layout.Column = 9;
+            obj.SaveEachCheck.Layout.Row = 2; obj.SaveEachCheck.Layout.Column = [10 11];
 
             obj.SweepLabel = uilabel(g, 'Text', 'sweep 0', 'FontWeight', 'bold');
-            obj.SweepLabel.Layout.Row = 2; obj.SweepLabel.Layout.Column = 10;
+            obj.SweepLabel.Layout.Row = 2; obj.SweepLabel.Layout.Column = 12;
 
             obj.TimeLabel = uilabel(g, 'Text', '00:00');
-            obj.TimeLabel.Layout.Row = 2; obj.TimeLabel.Layout.Column = 11;
+            obj.TimeLabel.Layout.Row = 2; obj.TimeLabel.Layout.Column = 13;
 
             obj.StatusLabel = uilabel(g, 'Text', '');
-            obj.StatusLabel.Layout.Row = 2; obj.StatusLabel.Layout.Column = [12 14];
+            obj.StatusLabel.Layout.Row = 2; obj.StatusLabel.Layout.Column = [14 16];
         end
 
         function buildWatchColumn(obj, body)
@@ -439,6 +447,7 @@ classdef AcqWindow < handle
             c.durationS   = obj.DurField.Value;
             c.isiS        = obj.IsiField.Value;
             c.testPulse   = obj.TestPulseCheck.Value;
+            c.holdingMv   = obj.HoldField.Value;
             c.sealTestMode = obj.SealBtn.Value;
             c.command     = obj.CommandPanel.spec();
             c.led         = obj.LedPanel.spec();
@@ -524,6 +533,8 @@ classdef AcqWindow < handle
                 ylabel(obj.BrowseAxes, 'Im (pA)');
                 ylabel(obj.IhAxes, 'pA');
                 obj.IhPanel.Title = 'Holding (pA)';
+                obj.HoldLabel.Text = 'hold (mV)';
+                obj.HoldField.Value = -70;
                 s.amplitude = 0;
             else
                 obj.CommandPanel.setAmplitudeUnit('pA');
@@ -531,6 +542,8 @@ classdef AcqWindow < handle
                 ylabel(obj.BrowseAxes, 'Vm (mV)');
                 ylabel(obj.IhAxes, 'mV');
                 obj.IhPanel.Title = 'Vrest (mV)';
+                obj.HoldLabel.Text = 'hold (pA)';
+                obj.HoldField.Value = 0;
                 s.amplitude = 200;
             end
             obj.CommandPanel.setSpec(s);
@@ -741,6 +754,7 @@ classdef AcqWindow < handle
             s.durationS  = sem.util.configField(sCfg, 'durationS', 1.0);
             s.isiS       = sem.util.configField(sCfg, 'isiS', 2.0);
             s.testPulse  = logical(sem.util.configField(sCfg, 'testPulse', true));
+            s.holdingMv  = sem.util.configField(sCfg, 'holdingMv', -70);
             s.testPulseStartMs = sem.util.configField(sCfg, 'testPulseStartMs', 50);
             s.sealTestIsiS = sem.util.configField(sCfg, 'sealTestIsiS', 0.5);
             s.sealTestDurationS = sem.util.configField(sCfg, 'sealTestDurationS', 0.2);
