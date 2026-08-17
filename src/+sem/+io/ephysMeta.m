@@ -25,8 +25,9 @@ end
 m = struct();
 m.schemaVersion = 1;
 m.clampMode = blockPlan.mode;                 % 'VC' | 'IC'
-m.holdingMv = blockPlan.holdingMv;
-m.holdingSource = 'software';                 % ao_cellCommand drives holding
+m.holdingMv = blockPlan.holdingMv;            % the holding this block asked for
+m.holdingSource = 'amplifier';                % the Commander applies it; the
+                                              % analog-out carries deviations
 m.blockLabel = blockPlan.label;
 m.blockId = blockPlan.blockId;
 m.gains = sem.util.Units.gainFromConfig(eCfg);

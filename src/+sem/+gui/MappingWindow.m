@@ -33,6 +33,7 @@ classdef MappingWindow < handle
                 options.Rig cell = {}
                 options.SessionDir (1,:) char = ''
                 options.Targets = []
+                options.Telegraph = []
                 options.BlockPlans cell = {}
                 options.Visible (1,1) string = "on"
             end
@@ -59,6 +60,9 @@ classdef MappingWindow < handle
             g.Padding = [6 6 6 6];
 
             obj.Runner = sem.protocol.EpisodicRunner(dmd, daq, config, obj.SessionDir);
+            % The amplifier owns holding here too: the runner reads it and sets
+            % it only to what the block asks for.
+            obj.Runner.telegraph = options.Telegraph;
 
             plans = options.BlockPlans;
             if isempty(plans) && ~isempty(options.Targets)

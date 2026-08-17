@@ -67,12 +67,14 @@ and running the mapping blocks. Two experiments:
   rethrows on any trial failure (fatal mid-patch; we mark-failed and
   continue, aborting only on `^(sem|tfp):hardware:` errors). Precedent:
   the DMD repo's own `exp_ensemble_activation`.
-- **Software-controlled holding**: block start ramps `ao_cellCommand` to
-  the block holding (Commander holding assumed 0 — recorded in every
-  trial's metadata); every queued waveform ends with cell-command at
-  holding, laser at 0, because the NI AO idles at its last written sample.
-  VC↔IC MODE switches stay manual (operator prompt). Verify the idle
-  behavior on the rig (`verify_wiring.m` step 2) before trusting this.
+- **The AMPLIFIER controls holding, everywhere.** The MultiClamp Commander
+  applies it; `ao_cellCommand` carries only DEVIATIONS and rests at 0, so the
+  NI AO idling at its last written sample leaves the cell at holding. Software
+  reads holding through `MultiClamp.getHolding` and writes it only on an
+  explicit request — the GUI's -70/+10 mV buttons, or a block declaring the
+  holding it needs. Software must never emit holding on the AO as well, or a
+  cell held at -70 sits at -140. VC↔IC MODE switches stay manual (operator
+  prompt). Verify the AO idle behavior on the rig (`verify_wiring.m` step 2).
 - **Targeting has NO camera**: opsin+ somata are imaged with 2p/ScanImage
   (red-FP tag), segmented in external software, imported as scan-field
   centroids (`sem.targeting.importSegmentation`), and mapped to DMD pixels
@@ -128,9 +130,9 @@ for ONE patched cell instead of two.
   `MultiClamp.getHolding/setHolding` is the interface; `ConfigTelegraph` is a
   stand-in until an `MccTelegraph` can really read the Commander, and
   `isHoldingKnown()` distinguishes a read value from an assumed one.
-  ⚠️ **This differs from `EpisodicRunner`**, which still commands holding in
-  software and assumes the Commander sits at 0. Reconcile before running blocks
-  and sweeps against the same cell.
+  `EpisodicRunner` follows the same model: it reads the amplifier's holding at
+  block start and sets it only to what the block declares, so sweeps and blocks
+  can run against the same cell without doubling holding.
 - **Channels are configured ONCE per session** by `PatchDaqAdapter`.
   `NI6323_DAQ.configureAnalogInput` APPENDS to the legacy session and nothing
   removes channels; `MockEphysDAQ` assigns, so the mock cannot catch a

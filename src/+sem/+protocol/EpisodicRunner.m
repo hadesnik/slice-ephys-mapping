@@ -73,6 +73,14 @@ classdef EpisodicRunner < handle
         %   uiconfirm-based handle instead.
         promptFcn = @sem.protocol.EpisodicRunner.defaultPrompt
 
+        %telegraph Link to the MultiClamp Commander, or [] when there is none.
+        %   The amplifier owns holding. With a telegraph attached the runner
+        %   READS the holding at block start, sets it only when the block needs
+        %   a different one (a 'VC-70' block IS a request to hold at -70), and
+        %   records what the amplifier reported. Without one it records NaN
+        %   rather than inventing a number.
+        telegraph = []
+
         %sealRuleFcn Decide what to do when a seal-quality rule trips.
         %   Called as action = sealRuleFcn(info) with fields rule, value, limit,
         %   blockLabel; returns 'continue' or 'abort'. Default warns and
@@ -87,6 +95,7 @@ classdef EpisodicRunner < handle
         scaledCol_ = NaN
         abortRequested_ = false
         lastBlockMode_ = 'VC'
+        appliedHoldingMv_ = NaN
     end
 
     methods
@@ -196,8 +205,11 @@ classdef EpisodicRunner < handle
 
             obj.markSessionBoundary(dCfg);
 
-            % Ramp the cell command to this block's holding level.
-            obj.rampHolding(blockPlan.mode, blockPlan.holdingMv);
+            % Put the AMPLIFIER at this block's holding; the AO carries only
+            % deviations. appliedHolding is what the Commander reports back,
+            % or NaN when there is no link to it.
+            appliedHolding = obj.applyBlockHolding(blockPlan);
+            obj.appliedHoldingMv_ = appliedHolding;
 
             % Pre-jittered, seeded ITIs (recorded per trial for provenance).
             rs = RandStream('mt19937ar', 'Seed', blockPlan.shuffleSeed + 5000);
@@ -311,6 +323,7 @@ classdef EpisodicRunner < handle
             blockMeta = struct( ...
                 'label', blockPlan.label, 'blockId', blockPlan.blockId, ...
                 'mode', blockPlan.mode, 'holdingMv', blockPlan.holdingMv, ...
+                'appliedHoldingMv', appliedHolding, ...
                 'shuffleSeed', blockPlan.shuffleSeed, ...
                 'gains', obj.gain_, 'sampleRate', obj.fs_);
             sessionMatPath = fullfile(blockDir, 'session.mat');
@@ -381,19 +394,37 @@ classdef EpisodicRunner < handle
             end
         end
 
-        function rampHolding(obj, mode, holdingMv)
-            %rampHolding ~100 ms ramp of the cell command to the block holding.
-            if strcmp(mode, 'VC')
-                targetVolts = sem.util.Units.commandCellToDaqVolts(holdingMv, 'VC', obj.gain_);
-            else
-                targetVolts = 0;   % CC blocks hold zero commanded current
+        function applied = applyBlockHolding(obj, blockPlan)
+            %applyBlockHolding Put the AMPLIFIER at this block's holding.
+            %   The Commander holds the cell; the analog-out carries only
+            %   deviations and rests at 0. Software adding holding on top of
+            %   what the amplifier already applies would double it.
+            %
+            %   Setting is legitimate here because running a 'VC-70' block IS a
+            %   request to hold at -70 - the same explicit request the GUI's
+            %   holding buttons make. Returns what the amplifier reports, or
+            %   NaN when there is no link to it.
+            obj.lastCellCmdVolts_ = 0;   % the AO rests at holding == 0 deviation
+            applied = NaN;
+            if isempty(obj.telegraph)
+                return
             end
-            nRamp = max(2, round(0.1 * obj.fs_));
-            cellCol = linspace(obj.lastCellCmdVolts_, targetVolts, nRamp)';
-            laserCol = zeros(nRamp, 1);
-            obj.daq.queueClockedAO([laserCol, cellCol], obj.fs_, 'immediate');
-            obj.lastCellCmdVolts_ = targetVolts;
-            pause(0.12);
+            try
+                want = blockPlan.holdingMv;
+                if strcmp(blockPlan.mode, 'IC')
+                    want = 0;   % current clamp holds no commanded current
+                end
+                if obj.telegraph.getHolding() ~= want
+                    obj.telegraph.setHolding(want);
+                end
+                applied = obj.telegraph.getHolding();
+            catch ME
+                warning('sem:protocol:EpisodicRunner:holdingUnavailable', ...
+                    ['Could not read or set the amplifier holding (%s). The ' ...
+                     'block will run at whatever the Commander is applying.'], ...
+                    ME.message);
+            end
+            pause(0.12);   % let the amplifier settle before the first trial
         end
 
         function patterns = buildChunkPatterns(obj, specs, radiusPx)

@@ -71,15 +71,17 @@ classdef test_MockEphysDAQ < matlab.unittest.TestCase
             fs = 20000;
             daq.startContinuousSession(struct('sampleRate', fs, ...
                 'aiChannels', [0, 1], 'aoChannels', [0, 1]));
-            holdV = sem.util.Units.commandCellToDaqVolts(-70, 'VC', model.gain);
-            daq.queueClockedAO([zeros(100, 1), repmat(holdV, 100, 1)], fs, 'immediate');
-            pause(0.12);   % settle: AO idles at holding after the queue drains
+            % The AMPLIFIER applies holding (setClampState above); the AO
+            % carries only deviations and rests at 0. Emitting holding here too
+            % would clamp the cell to -140 mV.
+            daq.queueClockedAO([zeros(100, 1), zeros(100, 1)], fs, 'immediate');
+            pause(0.12);   % settle: AO idles at zero deviation after the queue
             daq.setActiveStim(struct('kind', 'ensemble', ...
                 'cellIds', model.cellIds, 'fillFractions', ones(model.nCells, 1), ...
                 'centroids', model.dmdXY, 'laserVolts', 2, 'durS', 0.01));
             nStim = round(0.01 * fs);
             stimOnset = daq.queueClockedAO( ...
-                [[repmat(2, nStim, 1); 0], repmat(holdV, nStim + 1, 1)], fs, 'immediate');
+                [[repmat(2, nStim, 1); 0], zeros(nStim + 1, 1)], fs, 'immediate');
             pause(0.1);
             r = daq.stopContinuousSession();
 

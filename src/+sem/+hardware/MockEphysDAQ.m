@@ -556,7 +556,10 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             nSettle = max(1, round(0.05 * obj.sampleRate));
             cmdFull = [repmat(obj.lastFiniteCmdVolts_, nSettle, 1); cmdVolts];
 
-            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdFull, mode, gain);
+            % As in synthesizeSession: the amplifier supplies holding, the AO
+            % supplies deviations from it.
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdFull, mode, gain) ...
+                + obj.clampState_.holdingMv;
             aiFull  = obj.model_.synthesizePassive(cmdCell, mode, obj.sampleRate);
             aiCell  = aiFull(nSettle + 1:end);
             aiCell  = aiCell + obj.model_.drawNoise(nSamples, mode);
@@ -617,7 +620,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
                 cmdVolts((cursor - j0 + 1):end) = lastVal;
             end
 
-            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain);
+            % The AO carries DEVIATIONS; the amplifier applies holding on top.
+            % Modelling that here is what makes the mock match a rig where the
+            % Commander holds the cell (see sem.protocol.sweepWaveform).
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain) ...
+                + obj.clampState_.holdingMv;
             aiCell = obj.model_.synthesizePassive(cmdCell, mode, fs);
 
             % Evoked responses whose window overlaps this one.
@@ -683,7 +690,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
                 cmdVolts(cursor:nS) = lastVal;
             end
 
-            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain);
+            % The AO carries DEVIATIONS; the amplifier applies holding on top.
+            % Modelling that here is what makes the mock match a rig where the
+            % Commander holds the cell (see sem.protocol.sweepWaveform).
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain) ...
+                + obj.clampState_.holdingMv;
             aiCell = obj.model_.synthesizePassive(cmdCell, mode, fs);
 
             % Evoked responses for optogenetic stim events.

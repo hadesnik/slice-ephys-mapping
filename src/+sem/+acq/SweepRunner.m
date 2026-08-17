@@ -208,11 +208,19 @@ classdef SweepRunner < handle
                 mode = obj.currentMode();
                 [cellCmd, led, layout] = sem.protocol.sweepWaveform(cfg, mode, obj.fs_);
 
+                % Tell a mock rig what the amplifier is holding at, so its cell
+                % model sees the same level the real amplifier would apply.
+                % ismethod-guarded, so a real DAQ is untouched.
+                holdingCmd = obj.amplifierHolding();
+                if ~isnan(holdingCmd)
+                    sem.hardware.notifyClampState(obj.daq, ...
+                        struct('mode', mode, 'holdingMv', holdingCmd));
+                end
+
                 obj.daq.configureTrial(cellCmd, led, "", obj.fs_, numel(cellCmd) / obj.fs_);
                 ai = obj.daq.run();
 
                 seal = sem.analysis.sealAnalysis(ai, mode, cfg, obj.fs_, layout);
-                holdingCmd = obj.amplifierHolding();
 
                 obj.sweepCount = obj.sweepCount + 1;
                 elapsedMin = toc(obj.expStartTic_) / 60;

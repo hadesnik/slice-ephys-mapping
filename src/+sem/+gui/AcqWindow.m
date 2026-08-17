@@ -616,7 +616,7 @@ classdef AcqWindow < handle
             if isempty(obj.MappingWindow) || ~isvalid(obj.MappingWindow)
                 obj.MappingWindow = sem.gui.MappingWindow(obj.Config, ...
                     'Rig', {obj.Dmd, obj.Daq}, 'SessionDir', obj.SessionDir, ...
-                    'Targets', obj.Targets);
+                    'Targets', obj.Targets, 'Telegraph', obj.Telegraph);
             else
                 figure(obj.MappingWindow.Figure);
             end
