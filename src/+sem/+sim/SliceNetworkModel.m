@@ -234,6 +234,20 @@ classdef SliceNetworkModel < handle
             end
         end
 
+        function s = rngState(obj)
+            %rngState Snapshot the seeded stream (see setRngState).
+            s = obj.rng_.State;
+        end
+
+        function setRngState(obj, s)
+            %setRngState Restore a stream snapshot.
+            %   Exists so speculative, display-only synthesis (MockEphysDAQ's
+            %   peekContinuousAi) cannot advance the stream and perturb the
+            %   session's ground truth: every evoked response draws from this
+            %   stream, so an extra draw would change all later trials.
+            obj.rng_.State = s;
+        end
+
         function noise = drawNoise(obj, n, mode)
             %drawNoise n x 1 Gaussian baseline noise in cell units (seeded stream).
             noise = obj.noiseSigma(mode) * randn(obj.rng_, n, 1);

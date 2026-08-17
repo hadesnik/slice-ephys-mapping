@@ -89,6 +89,28 @@ classdef test_episodic_runner_events < matlab.unittest.TestCase
             tc.verifyTrue(contains(logTxt, 'block-aborted'));
         end
 
+        function live_trial_snippet_is_available_during_the_block(tc)
+            % The GUI plots each trial as it happens rather than waiting for
+            % block end. This needs the DAQ's peekContinuousAi; the mock has it.
+            [runner, blockPlan] = makeFixture(tc.TmpDir, 5);
+            lh = event.listener(runner, 'TrialFinished', ...
+                @(s, ~) tc.record('snippet', s.lastTrialSnippet)); %#ok<NASGU>
+
+            runner.runBlock(blockPlan);
+
+            snips = tc.valuesFor('snippet');
+            tc.verifyNumElements(snips, 5);
+            nonEmpty = cellfun(@(x) ~isempty(x), snips);
+            tc.verifyTrue(any(nonEmpty), ...
+                'no live snippet reached the listener during the block');
+            % In cell units (pA in VC), so a real response, not raw volts.
+            first = snips{find(nonEmpty, 1)};
+            tc.verifySize(first, [numel(first), 1]);
+            tc.verifyTrue(all(isfinite(first)));
+            tc.verifyGreaterThan(max(abs(first)), 1, ...
+                'a pA-scale trace should not look like raw volts');
+        end
+
         function abort_when_idle_is_a_noop(tc)
             [runner, ~] = makeFixture(tc.TmpDir, 4);
             runner.abort();

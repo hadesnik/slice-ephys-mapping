@@ -1,8 +1,9 @@
 # slice-ephys-mapping: PPSF + random-ensemble E/I mapping in slices
 
-MATLAB control (package `+sem`) + Python analysis for slice patch-clamp
-experiments driven by the lab's DMD temporal-focusing photostimulation
-system. Two experiments:
+MATLAB control (packages `+sem` and `+patchclamp`) + Python analysis for
+slice patch-clamp experiments driven by the lab's DMD temporal-focusing
+photostimulation system, with a GUI (`sem.gui.SliceEphysApp`) for patching
+and running the mapping blocks. Two experiments:
 
 1. **`exp_slice_ppsf`** — rigorous PPSF of the patched cell: subthreshold
    depolarization + spiking vs laser power × spot offset × DMD fill factor
@@ -79,9 +80,15 @@ system. Two experiments:
 - **Per-cell power = fill factor** (`tfp.patterns.fillFactorEnsemble`), one
   fixed laser voltage per session; the design matrix X holds fill fractions.
 - **Seal tests are trials** (kind 'sealTest'): block start/end + every
-  `ephys.sealTest_everyNTrials`; analyzed post-hoc at finalize (Phase A has
-  no mid-session AI readback), Rs rules surface as warnings in the block
-  result. Inline Rs-abort is a Phase B upgrade.
+  `ephys.sealTest_everyNTrials`. The AUTHORITATIVE analysis is still
+  post-hoc at finalize, from the continuous record; Rs rules go through
+  `sealRuleFcn` (warns by default, a modal in the GUI). Inline Rs-abort is
+  still a Phase B upgrade.
+- **Live in-block traces** come from `peekContinuousAi`, guarded by
+  `ismethod` so a DAQ without it just shows nothing. Implemented on
+  `MockEphysDAQ`; pending upstream for the real DAQ
+  ([docs/UPSTREAM_TFP_PEEK.md](docs/UPSTREAM_TFP_PEEK.md)). Peeked data is
+  DISPLAY ONLY — on the mock its noise realization differs from the record.
 
 ## Wiring / rig status
 
@@ -90,9 +97,36 @@ assignments are `%VERIFY` placeholders in `configs/slice_rig.yaml` +
 [docs/WIRING.md](docs/WIRING.md) until Phase B bringup closes them
 (`scripts/verify_wiring.m`). Mock development is unaffected.
 
+## The GUI (`src/+patchclamp` + `src/+sem/+gui`)
+
+`+patchclamp` was a standalone repo ("new whole-cell patch software"),
+merged in with its full history. It supplies the panels, the episodic
+`ExperimentRunner`, `TrialConfig`/`PulseTrain`/`Trial` and the crash-safe
+`Hdf5Writer`. It is kept as a SIBLING package, not renamed into `+sem`.
+
+- **One window, two tabs** — `sem.gui.SliceEphysApp`. *Patch* embeds
+  `patchclamp.gui.MainWindow`'s panel set (live membrane test, Rs/Ri/holding
+  trends); *Experiment* is `sem.gui.ExperimentPanel` driving
+  `sem.protocol.EpisodicRunner` with Start/Abort and live per-trial traces.
+- **`sem.hardware.PatchDaqAdapter`** is the only bridge between the GUI's
+  cell-units finite-trial DAQ contract and `tfp.hardware.DAQ`'s volts. Mode
+  and gain are latched per trial from the telegraph.
+- **`sem.hardware.ConfigTelegraph`** serves `config.ephys` gains through the
+  `MultiClamp` interface. No MCC telegraph exists yet, so the OPERATOR
+  declares the mode and must match the Commander.
+- **Board ownership**: `NI6323_DAQ`'s finite and continuous sessions cannot
+  both be active — the app stops patch mode before a block starts.
+- **Dedup rule**: `sem.util.Units` and `sem.analysis.sealAnalysis` are the
+  ONLY units/seal implementations. `sem.util.flattenSealTestCfg` /
+  `nestSealTestCfg` translate between the GUI's nested `sealTest` struct and
+  the flat `sealTest_*` config keys; `char` at every save boundary.
+- GUI code may use MATLAB `string` in memory but never in a saved field.
+
 ## Workflow
 
-- MATLAB tests: `matlab -nodisplay -batch "runtests"` (repo root).
+- MATLAB tests: `matlab -nodisplay -batch "runtests"` (repo root). GUI tests
+  are included — `uifigure` works headless here, verified on R2023a/macOS.
+- Launch the app on mocks: `matlab -batch "sem.gui.SliceEphysApp('configs/mock.yaml')"`.
 - Python: `cd analysis && .venv/bin/python -m pytest`.
 - Full roundtrip: `matlab -nodisplay -batch "run(fullfile('scripts','run_mock_session.m'))"`
   then `cd analysis && .venv/bin/python -m pytest tests/test_mock_roundtrip.py -v`.
@@ -105,5 +139,10 @@ assignments are `%VERIFY` placeholders in `configs/slice_rig.yaml` +
 1. This file.
 2. [ARCHITECTURE.md](ARCHITECTURE.md) — modules, block flow, mock synthesis.
 3. [docs/DATA_SCHEMA.md](docs/DATA_SCHEMA.md) — what lands on disk.
-4. [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — the tfp contract.
+4. [docs/DEPENDENCIES.md](docs/DEPENDENCIES.md) — the tfp contract, and
+   [docs/UPSTREAM_TFP_PEEK.md](docs/UPSTREAM_TFP_PEEK.md) for the one pending
+   upstream change (live in-block AI on the real DAQ).
 5. `src/+sem/+protocol/EpisodicRunner.m` and `+sim/SliceNetworkModel.m`.
+6. `src/+sem/+gui/SliceEphysApp.m` for the GUI, and
+   [docs/patchclamp_origin/](docs/patchclamp_origin/) for the merged repo's
+   original design notes (superseded, kept for provenance).

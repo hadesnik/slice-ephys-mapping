@@ -375,6 +375,68 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             end
         end
 
+        function data = peekContinuousAi(obj, range)
+            %peekContinuousAi Already-acquired AI from the running session.
+            %   data = peekContinuousAi(obj, n)        last n samples
+            %   data = peekContinuousAi(obj, [i0 i1])  that 1-based sample range
+            %
+            %   For LIVE DISPLAY ONLY. On real hardware this returns the actual
+            %   acquired samples, identical to what stopContinuousSession will
+            %   report. On this mock it re-synthesizes from the queued events, so
+            %   the NOISE REALIZATION DIFFERS between a peek and the final
+            %   record: the signal is right, the exact samples are not. Never
+            %   analyze peeked data — the authoritative record is the one
+            %   stopContinuousSession returns.
+            %
+            %   Mirrors the tfp.hardware.DAQ entry point of the same name (see
+            %   docs/UPSTREAM_TFP_PEEK.md); this repo's copy exists so the GUI
+            %   can be developed and tested mock-first.
+            if ~obj.isRunning || isempty(obj.continuousCfg_)
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'peekContinuousAi called without an active continuous session.');
+            end
+            snap = obj.continuousCfg_;
+            nAi = numel(snap.aiChannels);
+            nNow = double(obj.currentSampleIndex()) - 1;   % last acquired sample
+            if nNow < 1 || nAi == 0
+                data = zeros(0, nAi);
+                return
+            end
+
+            if isscalar(range)
+                i1 = nNow;
+                i0 = max(1, nNow - double(range) + 1);
+            elseif numel(range) == 2
+                i0 = max(1, double(range(1)));
+                i1 = min(nNow, double(range(2)));
+            else
+                error('tfp:hardware:DAQ:badShape', ...
+                    'range must be a sample count or a [i0 i1] pair.');
+            end
+            if i1 < i0
+                data = zeros(0, nAi);
+                return
+            end
+
+            if isempty(obj.model_)
+                data = randn(i1 - i0 + 1, nAi) * 0.01;
+                return
+            end
+
+            % Synthesize ONLY the requested window (plus a lead-in so the
+            % passive IIRs have settled), and restore the model's stream
+            % afterwards. Both matter: synthesizing the whole session here made
+            % a block O(n^2), and every draw from the shared stream would shift
+            % the evoked responses of all later trials — the peek would change
+            % the ground truth it is supposed to be observing.
+            lead = round(0.2 * snap.sampleRate);
+            j0 = max(1, i0 - lead);
+            rngSnapshot = obj.model_.rngState();
+            restore = onCleanup(@() obj.model_.setRngState(rngSnapshot));
+            seg = obj.synthesizeWindow(snap, j0, i1);
+            data = seg((i0 - j0 + 1):end, :);
+        end
+
         function result = stopContinuousSession(obj)
             if ~obj.isRunning || isempty(obj.continuousCfg_)
                 error('tfp:hardware:DAQ:notRunning', ...
@@ -480,6 +542,85 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             aiCell  = obj.model_.synthesizePassive(cmdCell, mode, obj.sampleRate);
             aiCell  = aiCell + obj.model_.drawNoise(nSamples, mode);
             data(:, scaledCol) = sem.util.Units.scaledCellToDaqVolts(aiCell, mode, gain);
+        end
+
+        function seg = synthesizeWindow(obj, snap, j0, j1)
+            %synthesizeWindow AI over sample range [j0, j1] only (DAQ volts).
+            %   Same physics as synthesizeSession over a slice, so a live peek
+            %   costs O(window) rather than O(session). Callers must snapshot and
+            %   restore the model's RNG around this (see peekContinuousAi).
+            fs = snap.sampleRate;
+            mode = obj.sessionClampMode_;
+            gain = obj.model_.gain;
+            nAi = numel(snap.aiChannels);
+            n = j1 - j0 + 1;
+            seg = randn(n, nAi) * 0.005;
+
+            scaledCol = find(snap.aiChannels == obj.aiScaledChan_, 1);
+            if isempty(scaledCol) || n <= 0
+                return
+            end
+            cellCol = find(snap.aoChannels == obj.aoCellCmdChan_, 1);
+
+            % Command trace across the window. Events before it only matter for
+            % the level the AO line is holding when the window opens.
+            cmdVolts = zeros(n, 1);
+            lastVal = 0;
+            cursor = j0;
+            for e = 1:numel(obj.events_)
+                ev = obj.events_(e);
+                if isempty(cellCol)
+                    w = zeros(size(ev.samples, 1), 1);
+                else
+                    w = ev.samples(:, cellCol);
+                end
+                i0e = max(1, round(ev.onset));
+                i1e = i0e + numel(w) - 1;
+                if i1e < j0
+                    lastVal = w(end);          % entirely before: just carry the level
+                    continue
+                end
+                if i0e > j1
+                    break
+                end
+                a = max(i0e, j0);
+                b = min(i1e, j1);
+                if a > cursor
+                    cmdVolts((cursor - j0 + 1):(a - j0 - 1 + 1)) = lastVal;
+                end
+                cmdVolts((a - j0 + 1):(b - j0 + 1)) = w((a - i0e + 1):(b - i0e + 1));
+                lastVal = w(end);
+                cursor = b + 1;
+            end
+            if cursor <= j1
+                cmdVolts((cursor - j0 + 1):end) = lastVal;
+            end
+
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain);
+            aiCell = obj.model_.synthesizePassive(cmdCell, mode, fs);
+
+            % Evoked responses whose window overlaps this one.
+            nWin = round(0.25 * fs);
+            for e = 1:numel(obj.events_)
+                ev = obj.events_(e);
+                if isempty(ev.stim) || ~ismember(ev.stim.kind, ...
+                        {'ensemble', 'single', 'blank', 'direct'})
+                    continue
+                end
+                i0e = max(1, round(ev.onset));
+                if i0e > j1 || (i0e + nWin - 1) < j0
+                    continue
+                end
+                clampState = struct('mode', ev.clampMode, 'holdingMv', ev.holdingMv);
+                snip = obj.model_.synthesizeEvoked(ev.stim, clampState, fs, nWin);
+                a = max(i0e, j0);
+                b = min(i0e + nWin - 1, j1);
+                aiCell((a - j0 + 1):(b - j0 + 1)) = ...
+                    aiCell((a - j0 + 1):(b - j0 + 1)) + snip((a - i0e + 1):(b - i0e + 1));
+            end
+
+            aiCell = aiCell + obj.model_.drawNoise(n, mode);
+            seg(:, scaledCol) = sem.util.Units.scaledCellToDaqVolts(aiCell, mode, gain);
         end
 
         function aiData = synthesizeSession(obj, snap, nS)

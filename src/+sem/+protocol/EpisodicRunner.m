@@ -58,6 +58,12 @@ classdef EpisodicRunner < handle
         lastTrialResult = []  % most recent tfp.trial.Trial
         lastSealResult = []   % most recent seal analysis struct
         lastError = []
+
+        %lastTrialSnippet Live view of the last trial, in CELL UNITS.
+        %   Empty unless the DAQ supports peekContinuousAi. DISPLAY ONLY — the
+        %   authoritative record is sliced from stopContinuousSession at block
+        %   end (on the mock the peeked noise realization differs).
+        lastTrialSnippet = []
     end
 
     properties
@@ -80,6 +86,7 @@ classdef EpisodicRunner < handle
         fs_
         scaledCol_ = NaN
         abortRequested_ = false
+        lastBlockMode_ = 'VC'
     end
 
     methods
@@ -126,6 +133,7 @@ classdef EpisodicRunner < handle
             obj.trialIndex = 0;
             obj.lastError = [];
             obj.nTrials = numel(blockPlan.trials);
+            obj.lastBlockMode_ = blockPlan.mode;
             obj.setState('Running');
             stateGuard = onCleanup(@() obj.setState('Idle'));
             interactive = sem.util.configField(opts, 'interactive', false);
@@ -239,6 +247,7 @@ classdef EpisodicRunner < handle
 
                     obj.trialIndex = stimTrialNum;
                     obj.lastTrialResult = t;
+                    obj.lastTrialSnippet = obj.peekTrialWindow(t, s, preS, postS);
                     notify(obj, 'TrialFinished');
                     notify(obj, 'BlockProgress');
 
@@ -545,6 +554,32 @@ classdef EpisodicRunner < handle
                     'value', abs(rsVals(end) - rsVals(1)) / rsVals(1), ...
                     'limit', driftFrac, 'rsFirst', rsVals(1), 'rsLast', rsVals(end), ...
                     'blockLabel', label));
+            end
+        end
+
+        function snippet = peekTrialWindow(obj, tr, st, preS, postS)
+            %peekTrialWindow This trial's response, for live display only.
+            %   Uses the DAQ's peekContinuousAi when it has one. Guarded with
+            %   ismethod, the same idiom sem.hardware.notifyStim uses, so the
+            %   block runs unchanged on a DAQ without the entry point (the real
+            %   NI6323_DAQ until the upstream change in
+            %   docs/UPSTREAM_TFP_PEEK.md lands) — it just shows nothing live.
+            snippet = [];
+            if ~ismethod(obj.daq, 'peekContinuousAi') || isnan(obj.scaledCol_)
+                return
+            end
+            try
+                i0 = double(tr.t_onset_daq_samples) - round(preS * obj.fs_);
+                i1 = st.offsetSample + round(postS * obj.fs_);
+                raw = obj.daq.peekContinuousAi([max(1, i0), i1]);
+                if isempty(raw) || size(raw, 2) < obj.scaledCol_
+                    return
+                end
+                snippet = sem.util.Units.scaledDaqVoltsToCell( ...
+                    raw(:, obj.scaledCol_), obj.lastBlockMode_, obj.gain_);
+            catch
+                % Live display is best-effort and must never break a block.
+                snippet = [];
             end
         end
 
