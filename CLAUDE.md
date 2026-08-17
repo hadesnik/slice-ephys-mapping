@@ -140,7 +140,10 @@ for ONE patched cell instead of two.
 
 - MATLAB tests: `matlab -nodisplay -batch "runtests"` (repo root). GUI tests
   are included — `uifigure` works headless here, verified on R2023a/macOS.
-- Launch the GUI on mocks: `matlab -batch "run(fullfile('scripts','run_gui_mock.m'))"`.
+- Launch the GUI on mocks: `matlab -r "run(fullfile('scripts','run_gui_mock.m'))"`,
+  or just `run(fullfile('scripts','run_gui_mock.m'))` at the MATLAB prompt.
+  **Not `-batch`** — that exits MATLAB as soon as the script returns and takes
+  the window with it. `-batch` is for tests and headless runs only.
 - Python: `cd analysis && .venv/bin/python -m pytest`.
 - Full roundtrip: `matlab -nodisplay -batch "run(fullfile('scripts','run_mock_session.m'))"`
   then `cd analysis && .venv/bin/python -m pytest tests/test_mock_roundtrip.py -v`.
