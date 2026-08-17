@@ -2,7 +2,7 @@
 
 MATLAB control (packages `+sem` and `+patchclamp`) + Python analysis for
 slice patch-clamp experiments driven by the lab's DMD temporal-focusing
-photostimulation system, with a GUI (`sem.gui.SliceEphysApp`) for patching
+photostimulation system, with an acquisition GUI (`sem.gui.AcqWindow`) for patching
 and running the mapping blocks. Two experiments:
 
 1. **`exp_slice_ppsf`** — rigorous PPSF of the patched cell: subthreshold
@@ -97,36 +97,50 @@ assignments are `%VERIFY` placeholders in `configs/slice_rig.yaml` +
 [docs/WIRING.md](docs/WIRING.md) until Phase B bringup closes them
 (`scripts/verify_wiring.m`). Mock development is unaffected.
 
-## The GUI (`src/+patchclamp` + `src/+sem/+gui`)
+## The GUI (`src/+sem/+gui`, `src/+sem/+acq`)
 
-`+patchclamp` was a standalone repo ("new whole-cell patch software"),
-merged in with its full history. It supplies the panels, the episodic
-`ExperimentRunner`, `TrialConfig`/`PulseTrain`/`Trial` and the crash-safe
-`Hdf5Writer`. It is kept as a SIBLING package, not renamed into `+sem`.
+`sem.gui.AcqWindow` is a rebuild of the lab's legacy `Acq` GUI, kept for
+reference (with its `.fig`) under
+[docs/old patch clamp GUI scripts/](docs/old%20patch%20clamp%20GUI%20scripts/),
+for ONE patched cell instead of two.
 
-- **One window, two tabs** — `sem.gui.SliceEphysApp`. *Patch* embeds
-  `patchclamp.gui.MainWindow`'s panel set (live membrane test, Rs/Ri/holding
-  trends); *Experiment* is `sem.gui.ExperimentPanel` driving
-  `sem.protocol.EpisodicRunner` with Start/Abort and live per-trial traces.
-- **`sem.hardware.PatchDaqAdapter`** is the only bridge between the GUI's
-  cell-units finite-trial DAQ contract and `tfp.hardware.DAQ`'s volts. Mode
-  and gain are latched per trial from the telegraph.
-- **`sem.hardware.ConfigTelegraph`** serves `config.ephys` gains through the
-  `MultiClamp` interface. No MCC telegraph exists yet, so the OPERATOR
-  declares the mode and must match the Commander.
-- **Board ownership**: `NI6323_DAQ`'s finite and continuous sessions cannot
-  both be active — the app stops patch mode before a block starts.
-- **Dedup rule**: `sem.util.Units` and `sem.analysis.sealAnalysis` are the
-  ONLY units/seal implementations. `sem.util.flattenSealTestCfg` /
-  `nestSealTestCfg` translate between the GUI's nested `sealTest` struct and
-  the flat `sealTest_*` config keys; `char` at every save boundary.
-- GUI code may use MATLAB `string` in memory but never in a saved field.
+- **Free-running, not block-planned.** `sem.acq.SweepRunner` repeats sweeps at
+  a fixed ISI until Stop. **ISI is onset-to-onset**, the legacy meaning.
+  Parameters are re-read at the top of each sweep, so a live edit lands on the
+  NEXT sweep and never the one in flight. `acquireOne()` is the deterministic
+  single-sweep path — `start()` genuinely free-runs, so it cannot be assumed
+  to yield exactly one sweep.
+- **Stimulus grammar**: `sem.protocol.pulseTrain` (start ms, N, width ms,
+  amplitude, frequency as onset-to-onset period) composed by
+  `sem.protocol.sweepWaveform` into [test pulse] + [command train] on the cell
+  command and [LED train] on the light line. Trains SUM where they overlap,
+  as the legacy `AO0 = testpulse + CCoutput1` did.
+- **The two stimulus panels** (`sem.gui.StimPanel`) each carry the full legacy
+  parameter set plus stepping. Editing a field does nothing until **Update** —
+  that separation is what lets a value be dialled in mid-run.
+- **One stepping mechanism** (`SweepRunner.stepSpec`) serves both the F/I
+  current family and the LED parameter sweep.
+- **Seal test is inline**: a mode of the same loop with the stimulus stripped,
+  so the trends keep filling. Rs / Rin / holding are numeric readouts in the
+  trend-strip titles — the legacy GUI had numbers only in a separate window.
+- **Mapping** (`sem.gui.MappingWindow`) is launched from the window, as the
+  legacy MappingGui button did, and stops the sweep loop first: `NI6323_DAQ`'s
+  finite and continuous sessions cannot both be active.
+- **`sem.hardware.PatchDaqAdapter`** is the only bridge between cell units and
+  DAQ volts on the sweep path; **`ConfigTelegraph`** serves `config.ephys`
+  gains through the `MultiClamp` interface (the operator declares the mode —
+  there is no MCC telegraph yet).
+- Sweeps are saved by `sem.io.saveSweep` in this repo's trial format (DAQ
+  volts + gains snapshot, `kind='sweep'`), so the Python pipeline is unchanged.
+- `+patchclamp` now supplies only library code (`+hardware` base classes and
+  fakes, `+protocol`, `+config`, `+storage`); its GUI was superseded and
+  removed.
 
 ## Workflow
 
 - MATLAB tests: `matlab -nodisplay -batch "runtests"` (repo root). GUI tests
   are included — `uifigure` works headless here, verified on R2023a/macOS.
-- Launch the app on mocks: `matlab -batch "sem.gui.SliceEphysApp('configs/mock.yaml')"`.
+- Launch the GUI on mocks: `matlab -batch "run(fullfile('scripts','run_gui_mock.m'))"`.
 - Python: `cd analysis && .venv/bin/python -m pytest`.
 - Full roundtrip: `matlab -nodisplay -batch "run(fullfile('scripts','run_mock_session.m'))"`
   then `cd analysis && .venv/bin/python -m pytest tests/test_mock_roundtrip.py -v`.
@@ -143,6 +157,7 @@ merged in with its full history. It supplies the panels, the episodic
    [docs/UPSTREAM_TFP_PEEK.md](docs/UPSTREAM_TFP_PEEK.md) for the one pending
    upstream change (live in-block AI on the real DAQ).
 5. `src/+sem/+protocol/EpisodicRunner.m` and `+sim/SliceNetworkModel.m`.
-6. `src/+sem/+gui/SliceEphysApp.m` for the GUI, and
-   [docs/patchclamp_origin/](docs/patchclamp_origin/) for the merged repo's
-   original design notes (superseded, kept for provenance).
+6. `src/+sem/+gui/AcqWindow.m` and `src/+sem/+acq/SweepRunner.m` for the GUI,
+   with the legacy original under
+   [docs/old patch clamp GUI scripts/](docs/old%20patch%20clamp%20GUI%20scripts/)
+   as the design reference.

@@ -2,7 +2,7 @@ classdef test_patch_mode_mock < matlab.unittest.TestCase
     %test_patch_mode_mock Patch mode (live membrane test) end-to-end on the mock.
     %
     %   Closes the loop that patch mode depends on:
-    %     patchclamp GUI runner -> sem.hardware.PatchDaqAdapter (cell units ->
+    %     sem.acq.SweepRunner -> sem.hardware.PatchDaqAdapter (cell units ->
     %     DAQ volts) -> sem.hardware.MockEphysDAQ finite path -> SliceNetworkModel
     %     passive membrane -> back through the adapter (volts -> cell units) ->
     %     sem.analysis.sealAnalysis
@@ -25,8 +25,8 @@ classdef test_patch_mode_mock < matlab.unittest.TestCase
             [runner, model, adapter] = tc.buildPatchStack('VC'); %#ok<ASGLU>
             res = tc.oneSweep(runner);
 
-            tc.verifyEqual(res.mode, "VC");
-            tc.verifyEqual(res.holdingUnit, "pA");
+            tc.verifyEqual(res.mode, 'VC');
+            tc.verifyEqual(res.holdingUnit, 'pA');
             tc.verifyEqual(res.rsMohm, model.params.rsMohm, 'RelTol', 0.10);
             tc.verifyEqual(res.riMohm, model.params.rinMohm, 'RelTol', 0.10);
         end
@@ -35,8 +35,8 @@ classdef test_patch_mode_mock < matlab.unittest.TestCase
             [runner, model, ~] = tc.buildPatchStack('IC');
             res = tc.oneSweep(runner);
 
-            tc.verifyEqual(res.mode, "IC");
-            tc.verifyEqual(res.holdingUnit, "mV");
+            tc.verifyEqual(res.mode, 'IC');
+            tc.verifyEqual(res.holdingUnit, 'mV');
             tc.verifyTrue(isnan(res.rsMohm), 'Rs is undefined in current clamp.');
             % With no command current the cell sits at rest.
             tc.verifyEqual(res.holding, model.params.vrestMv, 'AbsTol', 2.0);
@@ -195,29 +195,27 @@ classdef test_patch_mode_mock < matlab.unittest.TestCase
             telegraph = sem.hardware.ConfigTelegraph(cfg, mode);
             adapter = sem.hardware.PatchDaqAdapter(daq, cfg, telegraph);
 
-            trialCfg = patchclamp.config.TrialConfig.defaultConfig();
-            trialCfg.sampleRateHz = cfg.daq.sampleRate;
-            trialCfg.trialLengthSec = 0.4;   % > the 300 ms fixed preamble
-            trialCfg.itiSec = 0.01;
-            trialCfg.mode = string(mode);
-            % Rig YAML is the source of truth for seal-test parameters.
-            trialCfg.sealTest = sem.util.nestSealTestCfg(cfg.ephys);
-            trialCfg.opto = [];
-            trialCfg.commandStim = [];
+            % Rig YAML is the source of truth for the seal-test parameters.
+            sweepCfg = cfg.ephys;
+            sweepCfg.sampleRateHz = cfg.daq.sampleRate;
+            sweepCfg.durationS = 0.4;
+            sweepCfg.isiS = 0.05;
+            sweepCfg.testPulse = true;
+            sweepCfg.testPulseStartMs = 50;
+            sweepCfg.command = struct();
+            sweepCfg.led = struct();
 
-            runner = patchclamp.acquisition.ExperimentRunner( ...
-                adapter, telegraph, [], trialCfg);
+            runner = sem.acq.SweepRunner(adapter, telegraph, sweepCfg, tempname());
             tc.addTeardown(@() delete(runner));
         end
 
         function res = oneSweep(tc, runner)
-            % start() runs the first trial synchronously on the caller's stack,
-            % then arms the ITI timer; stop() cancels it. That gives exactly one
-            % deterministic sweep with no timing dependence in the test.
-            runner.start();
-            runner.stop();
-            res = runner.lastTrialResult;
-            tc.assertNotEmpty(res, 'the sweep produced no trial result');
+            % acquireOne is the deterministic single-sweep entry point; start()
+            % free-runs and may fire a second sweep before a caller can Stop.
+            runner.acquireOne();
+            res = runner.lastSweep.seal;
+            res.aiCellUnits = runner.lastSweep.ai;
+            tc.assertNotEmpty(res, 'the sweep produced no result');
         end
 
         function bumpEvent(tc)

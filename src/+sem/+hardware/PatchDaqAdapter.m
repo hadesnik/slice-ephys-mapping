@@ -1,7 +1,7 @@
 classdef PatchDaqAdapter < patchclamp.hardware.DAQ
     %PatchDaqAdapter Run the patching GUI's DAQ contract on sem/tfp hardware.
     %
-    %   The GUI layer (patchclamp.acquisition.ExperimentRunner) speaks a
+    %   The acquisition layer (sem.acq.SweepRunner) speaks a
     %   three-method finite-trial contract in CELL UNITS:
     %       configureTrial(ao0CellUnits, ao2LedVolts, aiChan, fs, durationSec)
     %       aiCellUnits = run()

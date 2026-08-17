@@ -92,6 +92,15 @@ ppsf:
 
 calibration_file: ''     # calibration containing dmdToScan_affine (run_dmd_scan_calibration)
 
+sweep:
+  durationS: 1.0           # sweep length (s)
+  isiS: 2.0                # ONSET-TO-ONSET period, not a gap
+  testPulse: true          # membrane test in every sweep
+  testPulseStartMs: 50     # where the test pulse sits in the sweep
+  sealTestIsiS: 0.5        # faster repeat while in seal-test mode
+  sealTestDurationS: 0.2   # short sweep while sealing
+  fiStepPa: 20             # F/I family current increment per sweep
+
 ui:
   liveFigure: true
   patchSweepRateHz: 2      # membrane-test sweeps/s; the fixed 300 ms trial preamble caps this near 2.9
