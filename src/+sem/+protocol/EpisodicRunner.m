@@ -27,12 +27,65 @@ classdef EpisodicRunner < handle
     %   Error policy: a failed trial is marked failed and the block CONTINUES;
     %   only hardware-family errors (^(sem|tfp):hardware:) abort the block.
 
+    %   GUI integration (see also sem.gui): runBlock notifies as it goes and can
+    %   be stopped mid-block. Listeners read the public properties off the source
+    %   (notify is synchronous), matching how the patchclamp layer does it.
+    %
+    %   Stopping works without restructuring the loop because MATLAB's pause()
+    %   pumps the event queue, so a GUI button callback fires during the
+    %   inter-trial pause and sets the abort flag; the flag is checked at each
+    %   trial boundary. An aborted block still stops the session, slices, saves
+    %   and analyzes, so a partial block remains a valid, analyzable block.
+
+    events
+        TrialFinished      % listener reads obj.trialIndex / obj.lastTrialResult
+        SealTestDone       % listener reads obj.lastSealResult
+        BlockProgress      % listener reads obj.trialIndex / obj.nTrials
+        StateChanged       % listener reads obj.state
+        AcquisitionError   % listener reads obj.lastError
+    end
+
     properties (SetAccess = private)
         dmd
         daq
         config
         sessionDir
         sessionStartTime = NaT
+
+        state = 'Idle'        % 'Idle' | 'Running' | 'Stopping'
+        trialIndex = 0        % trials completed in the current block
+        nTrials = 0           % planned stim trials in the current block
+        lastTrialResult = []  % most recent tfp.trial.Trial
+        lastSealResult = []   % most recent seal analysis struct
+        lastError = []
+
+        %lastTrialSnippet Live view of the last trial, in CELL UNITS.
+        %   Empty unless the DAQ supports peekContinuousAi. DISPLAY ONLY — the
+        %   authoritative record is sliced from stopContinuousSession at block
+        %   end (on the mock the peeked noise realization differs).
+        lastTrialSnippet = []
+    end
+
+    properties
+        %promptFcn Operator prompt, injectable so a GUI can replace stdin.
+        %   Called as promptFcn(message) at block start when opts.interactive.
+        %   Default prints the message and blocks on input(); a GUI supplies a
+        %   uiconfirm-based handle instead.
+        promptFcn = @sem.protocol.EpisodicRunner.defaultPrompt
+
+        %telegraph Link to the MultiClamp Commander, or [] when there is none.
+        %   The amplifier owns holding. With a telegraph attached the runner
+        %   READS the holding at block start, sets it only when the block needs
+        %   a different one (a 'VC-70' block IS a request to hold at -70), and
+        %   records what the amplifier reported. Without one it records NaN
+        %   rather than inventing a number.
+        telegraph = []
+
+        %sealRuleFcn Decide what to do when a seal-quality rule trips.
+        %   Called as action = sealRuleFcn(info) with fields rule, value, limit,
+        %   blockLabel; returns 'continue' or 'abort'. Default warns and
+        %   continues, preserving the historical behavior for scripted runs.
+        sealRuleFcn = @sem.protocol.EpisodicRunner.defaultSealRule
     end
 
     properties (Access = private)
@@ -40,6 +93,9 @@ classdef EpisodicRunner < handle
         gain_
         fs_
         scaledCol_ = NaN
+        abortRequested_ = false
+        lastBlockMode_ = 'VC'
+        appliedHoldingMv_ = NaN
     end
 
     methods
@@ -65,11 +121,30 @@ classdef EpisodicRunner < handle
             end
         end
 
+        function abort(obj)
+            %abort Request that the running block stop at the next trial boundary.
+            %   Safe to call from a GUI callback while runBlock is executing (the
+            %   inter-trial pause pumps the event queue). The block still stops
+            %   the session, slices, saves and analyzes what it collected.
+            %   No-op when idle.
+            if strcmp(obj.state, 'Running')
+                obj.abortRequested_ = true;
+                obj.setState('Stopping');
+            end
+        end
+
         function result = runBlock(obj, blockPlan, opts)
             %runBlock Execute one clamp block; returns trials + seal results.
             if nargin < 3 || isempty(opts)
                 opts = struct();
             end
+            obj.abortRequested_ = false;
+            obj.trialIndex = 0;
+            obj.lastError = [];
+            obj.nTrials = numel(blockPlan.trials);
+            obj.lastBlockMode_ = blockPlan.mode;
+            obj.setState('Running');
+            stateGuard = onCleanup(@() obj.setState('Idle'));
             interactive = sem.util.configField(opts, 'interactive', false);
             saveTrials = sem.util.configField(opts, 'saveTrials', true);
             liveFig = sem.util.configField( ...
@@ -100,11 +175,11 @@ classdef EpisodicRunner < handle
 
             % Manual step: the amplifier owns the MODE. Holding is ours.
             if interactive
-                fprintf(['\n[%s] Set the MultiClamp Commander to %s mode now.\n' ...
+                msg = sprintf(['[%s] Set the MultiClamp Commander to %s mode now.\n' ...
                          'Holding will be commanded in software (%g mV via ' ...
-                         'ao_cellCommand; Commander holding must be 0).\n'], ...
+                         'ao_cellCommand; Commander holding must be 0).'], ...
                     blockPlan.label, blockPlan.mode, blockPlan.holdingMv);
-                input('Press Enter when ready...', 's');
+                obj.promptFcn(msg);
             end
             tfp.io.sessionLog(obj.sessionDir, 'clamp-state', struct( ...
                 'mode', blockPlan.mode, 'holdingMv', blockPlan.holdingMv, ...
@@ -130,8 +205,11 @@ classdef EpisodicRunner < handle
 
             obj.markSessionBoundary(dCfg);
 
-            % Ramp the cell command to this block's holding level.
-            obj.rampHolding(blockPlan.mode, blockPlan.holdingMv);
+            % Put the AMPLIFIER at this block's holding; the AO carries only
+            % deviations. appliedHolding is what the Commander reports back,
+            % or NaN when there is no link to it.
+            appliedHolding = obj.applyBlockHolding(blockPlan);
+            obj.appliedHoldingMv_ = appliedHolding;
 
             % Pre-jittered, seeded ITIs (recorded per trial for provenance).
             rs = RandStream('mt19937ar', 'Seed', blockPlan.shuffleSeed + 5000);
@@ -150,7 +228,12 @@ classdef EpisodicRunner < handle
             trials{end+1} = t; stash{end+1} = s; sealSpecs{end+1} = globalIdx; %#ok<AGROW>
 
             chunkStarts = 1:chunkSize:nStimTrials;
+            aborted = false;
             for c = 1:numel(chunkStarts)
+                if obj.abortRequested_
+                    aborted = true;
+                    break
+                end
                 idx0 = chunkStarts(c);
                 idx1 = min(nStimTrials, idx0 + chunkSize - 1);
                 specs = blockPlan.trials(idx0:idx1);
@@ -160,12 +243,25 @@ classdef EpisodicRunner < handle
                 obj.dmd.armSequence();
 
                 for i = 1:numel(specs)
+                    % Abort is checked at the trial boundary: the preceding
+                    % pause() pumped the event queue, so a GUI Stop callback has
+                    % already run and set the flag.
+                    if obj.abortRequested_
+                        aborted = true;
+                        break
+                    end
                     stimTrialNum = idx0 + i - 1;
                     globalIdx = globalIdx + 1;
                     [t, s, failed] = obj.runStimTrial(specs(i), i, globalIdx, ...
                         blockPlan, stimDurS, itis(stimTrialNum), preS, postS);
                     trials{end+1} = t; stash{end+1} = s; %#ok<AGROW>
                     nFailed = nFailed + double(failed);
+
+                    obj.trialIndex = stimTrialNum;
+                    obj.lastTrialResult = t;
+                    obj.lastTrialSnippet = obj.peekTrialWindow(t, s, preS, postS);
+                    notify(obj, 'TrialFinished');
+                    notify(obj, 'BlockProgress');
 
                     if liveFig
                         obj.updateLiveFigure(blockPlan, stimTrialNum, nStimTrials, specs(i));
@@ -178,6 +274,14 @@ classdef EpisodicRunner < handle
                         trials{end+1} = t; stash{end+1} = s; sealSpecs{end+1} = globalIdx; %#ok<AGROW>
                     end
                 end
+                if aborted
+                    break
+                end
+            end
+            if aborted
+                tfp.io.sessionLog(obj.sessionDir, 'block-aborted', struct( ...
+                    'label', blockPlan.label, 'afterStimTrials', obj.trialIndex, ...
+                    'plannedStimTrials', nStimTrials));
             end
 
             % Closing seal test.
@@ -210,11 +314,16 @@ classdef EpisodicRunner < handle
             end
 
             sealResults = obj.analyzeSealTrials(trials, blockPlan, eCfg);
+            if ~isempty(sealResults)
+                obj.lastSealResult = sealResults(end);
+                notify(obj, 'SealTestDone');
+            end
             obj.checkSealRules(sealResults, eCfg, blockPlan.label);
 
             blockMeta = struct( ...
                 'label', blockPlan.label, 'blockId', blockPlan.blockId, ...
                 'mode', blockPlan.mode, 'holdingMv', blockPlan.holdingMv, ...
+                'appliedHoldingMv', appliedHolding, ...
                 'shuffleSeed', blockPlan.shuffleSeed, ...
                 'gains', obj.gain_, 'sampleRate', obj.fs_);
             sessionMatPath = fullfile(blockDir, 'session.mat');
@@ -230,6 +339,32 @@ classdef EpisodicRunner < handle
             result.nFailed = nFailed;
             result.sealTests = sealResults;
             result.sessionMatPath = sessionMatPath;
+            result.aborted = aborted;
+        end
+    end
+
+    methods (Static)
+        function defaultPrompt(message)
+            %defaultPrompt Terminal operator prompt (the historical behavior).
+            fprintf('\n%s\n', message);
+            input('Press Enter when ready...', 's');
+        end
+
+        function action = defaultSealRule(info)
+            %defaultSealRule Warn and continue, as scripted sessions always have.
+            switch info.rule
+                case 'rsAboveLimit'
+                    warning('sem:protocol:EpisodicRunner:rsAboveLimit', ...
+                        ['[%s] Rs = %.1f MOhm exceeds rsAbortMohm = %.1f in %d ' ...
+                         'seal test(s).'], info.blockLabel, info.value, info.limit, ...
+                        info.count);
+                case 'rsDrift'
+                    warning('sem:protocol:EpisodicRunner:rsDrift', ...
+                        '[%s] Rs drifted %.0f%% (limit %.0f%%) from %.1f to %.1f MOhm.', ...
+                        info.blockLabel, info.value * 100, info.limit * 100, ...
+                        info.rsFirst, info.rsLast);
+            end
+            action = 'continue';
         end
     end
 
@@ -259,19 +394,37 @@ classdef EpisodicRunner < handle
             end
         end
 
-        function rampHolding(obj, mode, holdingMv)
-            %rampHolding ~100 ms ramp of the cell command to the block holding.
-            if strcmp(mode, 'VC')
-                targetVolts = sem.util.Units.commandCellToDaqVolts(holdingMv, 'VC', obj.gain_);
-            else
-                targetVolts = 0;   % CC blocks hold zero commanded current
+        function applied = applyBlockHolding(obj, blockPlan)
+            %applyBlockHolding Put the AMPLIFIER at this block's holding.
+            %   The Commander holds the cell; the analog-out carries only
+            %   deviations and rests at 0. Software adding holding on top of
+            %   what the amplifier already applies would double it.
+            %
+            %   Setting is legitimate here because running a 'VC-70' block IS a
+            %   request to hold at -70 - the same explicit request the GUI's
+            %   holding buttons make. Returns what the amplifier reports, or
+            %   NaN when there is no link to it.
+            obj.lastCellCmdVolts_ = 0;   % the AO rests at holding == 0 deviation
+            applied = NaN;
+            if isempty(obj.telegraph)
+                return
             end
-            nRamp = max(2, round(0.1 * obj.fs_));
-            cellCol = linspace(obj.lastCellCmdVolts_, targetVolts, nRamp)';
-            laserCol = zeros(nRamp, 1);
-            obj.daq.queueClockedAO([laserCol, cellCol], obj.fs_, 'immediate');
-            obj.lastCellCmdVolts_ = targetVolts;
-            pause(0.12);
+            try
+                want = blockPlan.holdingMv;
+                if strcmp(blockPlan.mode, 'IC')
+                    want = 0;   % current clamp holds no commanded current
+                end
+                if obj.telegraph.getHolding() ~= want
+                    obj.telegraph.setHolding(want);
+                end
+                applied = obj.telegraph.getHolding();
+            catch ME
+                warning('sem:protocol:EpisodicRunner:holdingUnavailable', ...
+                    ['Could not read or set the amplifier holding (%s). The ' ...
+                     'block will run at whatever the Commander is applying.'], ...
+                    ME.message);
+            end
+            pause(0.12);   % let the amplifier settle before the first trial
         end
 
         function patterns = buildChunkPatterns(obj, specs, radiusPx)
@@ -335,6 +488,8 @@ classdef EpisodicRunner < handle
                 tfp.io.sessionLog(obj.sessionDir, 'trial-failed', struct( ...
                     'trialIdx', globalIdx, 'identifier', ME.identifier, ...
                     'message', ME.message));
+                obj.lastError = ME;
+                notify(obj, 'AcquisitionError');
                 if ~isempty(regexp(ME.identifier, '^(sem|tfp):hardware:', 'once'))
                     rethrow(ME);   % hardware faults invalidate the whole block
                 end
@@ -404,7 +559,12 @@ classdef EpisodicRunner < handle
             end
         end
 
-        function checkSealRules(~, sealResults, eCfg, label)
+        function checkSealRules(obj, sealResults, eCfg, label)
+            % Rules are evaluated post-hoc (Phase A has no mid-session AI
+            % readback), so "abort" here means the operator is told the block is
+            % not trustworthy — it cannot un-run the trials. The decision is
+            % routed through sealRuleFcn so a GUI can raise a modal instead of a
+            % warning that scrolls past unread.
             if isempty(sealResults)
                 return
             end
@@ -416,15 +576,50 @@ classdef EpisodicRunner < handle
                 return
             end
             if any(rsVals > rsAbort)
-                warning('sem:protocol:EpisodicRunner:rsAboveLimit', ...
-                    '[%s] Rs reached %.1f MOhm (limit %.1f) — inspect before trusting this block.', ...
-                    label, max(rsVals), rsAbort);
+                obj.sealRuleFcn(struct('rule', 'rsAboveLimit', ...
+                    'value', max(rsVals), 'limit', rsAbort, ...
+                    'count', nnz(rsVals > rsAbort), 'blockLabel', label));
             end
             if numel(rsVals) >= 2 && abs(rsVals(end) - rsVals(1)) / rsVals(1) > driftFrac
-                warning('sem:protocol:EpisodicRunner:rsDrift', ...
-                    '[%s] Rs drifted %.0f%% across the block (limit %.0f%%).', ...
-                    label, 100 * abs(rsVals(end) - rsVals(1)) / rsVals(1), 100 * driftFrac);
+                obj.sealRuleFcn(struct('rule', 'rsDrift', ...
+                    'value', abs(rsVals(end) - rsVals(1)) / rsVals(1), ...
+                    'limit', driftFrac, 'rsFirst', rsVals(1), 'rsLast', rsVals(end), ...
+                    'blockLabel', label));
             end
+        end
+
+        function snippet = peekTrialWindow(obj, tr, st, preS, postS)
+            %peekTrialWindow This trial's response, for live display only.
+            %   Uses the DAQ's peekContinuousAi when it has one. Guarded with
+            %   ismethod, the same idiom sem.hardware.notifyStim uses, so the
+            %   block runs unchanged on a DAQ without the entry point (the real
+            %   NI6323_DAQ until the upstream change in
+            %   docs/UPSTREAM_TFP_PEEK.md lands) — it just shows nothing live.
+            snippet = [];
+            if ~ismethod(obj.daq, 'peekContinuousAi') || isnan(obj.scaledCol_)
+                return
+            end
+            try
+                i0 = double(tr.t_onset_daq_samples) - round(preS * obj.fs_);
+                i1 = st.offsetSample + round(postS * obj.fs_);
+                raw = obj.daq.peekContinuousAi([max(1, i0), i1]);
+                if isempty(raw) || size(raw, 2) < obj.scaledCol_
+                    return
+                end
+                snippet = sem.util.Units.scaledDaqVoltsToCell( ...
+                    raw(:, obj.scaledCol_), obj.lastBlockMode_, obj.gain_);
+            catch
+                % Live display is best-effort and must never break a block.
+                snippet = [];
+            end
+        end
+
+        function setState(obj, newState)
+            if strcmp(obj.state, newState)
+                return
+            end
+            obj.state = newState;
+            notify(obj, 'StateChanged');
         end
 
         function updateLiveFigure(~, blockPlan, stimTrialNum, nStimTrials, spec)

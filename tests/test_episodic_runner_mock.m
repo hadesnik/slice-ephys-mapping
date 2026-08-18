@@ -74,20 +74,34 @@ classdef test_episodic_runner_mock < matlab.unittest.TestCase
             end
         end
 
-        function cell_command_ends_at_holding(tc)
-            % The AO idle convention the mock's command reconstruction (and
-            % the real NI behavior) relies on: every queued waveform's cell
-            % column must end at the block holding, laser column at 0.
+        function cell_command_rests_at_zero_deviation(tc)
+            % The AMPLIFIER holds the cell; the analog-out carries deviations
+            % and must return to 0 between trials. Software emitting the
+            % holding level too would double it against the Commander's.
             [runner, blockPlan, daq] = makeFixture(tc.TmpDir, 3);
             runner.runBlock(blockPlan);
             events = daq.getEvents();
-            gain = sem.util.Units.gainFromConfig(struct());
-            holdVolts = sem.util.Units.commandCellToDaqVolts(-70, 'VC', gain);
             tc.verifyGreaterThan(numel(events), 3);
-            for e = 2:numel(events)   % event 1 is the ramp itself
-                tc.verifyEqual(events(e).samples(end, 2), holdVolts, 'AbsTol', 1e-9);
-                tc.verifyEqual(events(e).samples(end, 1), 0, 'AbsTol', 1e-12);
+            for e = 1:numel(events)
+                tc.verifyEqual(events(e).samples(end, 2), 0, 'AbsTol', 1e-12, ...
+                    'the cell command must end at zero deviation');
+                tc.verifyEqual(events(e).samples(end, 1), 0, 'AbsTol', 1e-12, ...
+                    'the laser column must end dark');
             end
+        end
+
+        function block_sets_the_amplifier_holding_when_linked(tc)
+            % Running a 'VC-70' block IS a request to hold at -70, so the
+            % runner may set it - but through the amplifier, not the AO.
+            [runner, blockPlan, ~, config] = makeFixture(tc.TmpDir, 3);
+            tg = sem.hardware.ConfigTelegraph(config, 'VC');
+            tg.setHolding(0);
+            runner.telegraph = tg;
+
+            runner.runBlock(blockPlan);
+
+            tc.verifyEqual(tg.getHolding(), blockPlan.holdingMv, 'AbsTol', 1e-9, ...
+                'the block must put the amplifier at its own holding');
         end
 
         function per_trial_failure_continues_block(tc)

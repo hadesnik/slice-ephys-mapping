@@ -71,15 +71,17 @@ classdef test_MockEphysDAQ < matlab.unittest.TestCase
             fs = 20000;
             daq.startContinuousSession(struct('sampleRate', fs, ...
                 'aiChannels', [0, 1], 'aoChannels', [0, 1]));
-            holdV = sem.util.Units.commandCellToDaqVolts(-70, 'VC', model.gain);
-            daq.queueClockedAO([zeros(100, 1), repmat(holdV, 100, 1)], fs, 'immediate');
-            pause(0.12);   % settle: AO idles at holding after the queue drains
+            % The AMPLIFIER applies holding (setClampState above); the AO
+            % carries only deviations and rests at 0. Emitting holding here too
+            % would clamp the cell to -140 mV.
+            daq.queueClockedAO([zeros(100, 1), zeros(100, 1)], fs, 'immediate');
+            pause(0.12);   % settle: AO idles at zero deviation after the queue
             daq.setActiveStim(struct('kind', 'ensemble', ...
                 'cellIds', model.cellIds, 'fillFractions', ones(model.nCells, 1), ...
                 'centroids', model.dmdXY, 'laserVolts', 2, 'durS', 0.01));
             nStim = round(0.01 * fs);
             stimOnset = daq.queueClockedAO( ...
-                [[repmat(2, nStim, 1); 0], repmat(holdV, nStim + 1, 1)], fs, 'immediate');
+                [[repmat(2, nStim, 1); 0], zeros(nStim + 1, 1)], fs, 'immediate');
             pause(0.1);
             r = daq.stopContinuousSession();
 
@@ -111,6 +113,93 @@ classdef test_MockEphysDAQ < matlab.unittest.TestCase
             entries = daq.getLog();
             tc.verifyTrue(all(isfield(entries, {'timestamp', 'eventType', 'payload'})));
             tc.verifyEqual(entries(1).eventType, 'initialize');
+        end
+
+        function peek_returns_acquired_window(tc)
+            % Live in-block display depends on AI being readable DURING the
+            % session, not only at stop.
+            [daq, ~] = modelBackedDaq();
+            fs = 20000;
+            daq.startContinuousSession(struct('sampleRate', fs, ...
+                'aiChannels', [0, 1], 'aoChannels', [0, 1]));
+            pause(0.15);
+
+            last = daq.peekContinuousAi(200);
+            tc.verifySize(last, [200, 2]);
+            tc.verifyTrue(all(isfinite(last(:))));
+
+            ranged = daq.peekContinuousAi([1, 100]);
+            tc.verifySize(ranged, [100, 2]);
+
+            daq.stopContinuousSession();
+        end
+
+        function peek_clamps_range_and_rejects_garbage(tc)
+            [daq, ~] = modelBackedDaq();
+            daq.startContinuousSession(struct('sampleRate', 20000, ...
+                'aiChannels', [0, 1], 'aoChannels', [0, 1]));
+            pause(0.1);
+
+            % Asking past what has been acquired clamps instead of erroring.
+            wide = daq.peekContinuousAi([1, 1e9]);
+            tc.verifyLessThan(size(wide, 1), 1e9);
+            tc.verifyGreaterThan(size(wide, 1), 0);
+
+            tc.verifyError(@() daq.peekContinuousAi([1 2 3]), ...
+                'tfp:hardware:DAQ:badShape');
+
+            daq.stopContinuousSession();
+        end
+
+        function peek_outside_session_errors(tc)
+            [daq, ~] = modelBackedDaq();
+            tc.verifyError(@() daq.peekContinuousAi(10), ...
+                'tfp:hardware:DAQ:notRunning');
+        end
+
+        function peek_does_not_advance_the_model_rng(tc)
+            % Regression: peek used to synthesize through the model's seeded
+            % stream, so watching a block shifted the evoked responses of every
+            % later trial and broke the mock roundtrip. A peek is an
+            % observation; it must leave the ground truth exactly as it was.
+            [daq, model] = modelBackedDaq();
+            fs = 20000;
+            daq.setClampState(struct('mode', 'VC', 'holdingMv', -70));
+            daq.startContinuousSession(struct('sampleRate', fs, ...
+                'aiChannels', [0, 1], 'aoChannels', [0, 1]));
+            daq.setActiveStim(struct('kind', 'ensemble', ...
+                'cellIds', model.cellIds, 'fillFractions', ones(model.nCells, 1), ...
+                'centroids', model.dmdXY, 'laserVolts', 2, 'durS', 0.01));
+            daq.queueClockedAO([zeros(100, 1), zeros(100, 1)], fs, 'immediate');
+            pause(0.15);
+
+            before = model.rngState();
+            daq.peekContinuousAi(500);
+            daq.peekContinuousAi([1, 200]);
+            after = model.rngState();
+
+            tc.verifyEqual(after, before, ...
+                'peeking advanced the seeded stream and would corrupt the record');
+            daq.stopContinuousSession();
+        end
+
+        function peek_is_cheap_on_a_long_session(tc)
+            % Regression: peek used to re-synthesize the WHOLE session, making a
+            % block O(n^2) and tripling mock-session runtime. Cost must track
+            % the requested window, not elapsed session length.
+            [daq, ~] = modelBackedDaq();
+            fs = 20000;
+            daq.startContinuousSession(struct('sampleRate', fs, ...
+                'aiChannels', [0, 1], 'aoChannels', [0, 1]));
+            pause(0.2);
+            t0 = tic; daq.peekContinuousAi(500); early = toc(t0);
+            pause(1.0);
+            t1 = tic; daq.peekContinuousAi(500); late = toc(t1);
+            daq.stopContinuousSession();
+
+            % Same window later in a 5x longer session: allow generous slack for
+            % timing noise, but not growth proportional to session length.
+            tc.verifyLessThan(late, max(0.05, 5 * early + 0.02));
         end
     end
 end

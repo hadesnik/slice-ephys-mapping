@@ -58,6 +58,7 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
         continuousFinalSampleCount_ = uint64(0)
         continuousEverStarted_ = false
         sessionClampMode_ = ''
+        lastFiniteCmdVolts_ = 0   % AO idle level carried between finite sweeps
     end
 
     methods
@@ -140,8 +141,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             events = obj.events_;
         end
 
-        function configureAnalogInput(obj, channels, rangeV, ~)
+        function configureAnalogInput(obj, channels, rangeV, singleEndedChannels)
             obj.requireInitialized('configureAnalogInput');
+            if nargin < 4
+                singleEndedChannels = [];
+            end
             if ~all(ismember(channels, obj.analogInChannels))
                 error('sem:hardware:MockEphysDAQ:badChannels', ...
                     'channels must be a subset of analogInChannels = [%s]; got [%s].', ...
@@ -149,7 +153,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             end
             obj.configuredAiChannels_ = channels;
             obj.aiRangeV_ = rangeV;
-            obj.logEvent('configureAnalogInput', struct('channels', channels, 'rangeV', rangeV));
+            % Logged so callers can be checked against the real DAQ's contract:
+            % NI6323_DAQ sets InputType='SingleEnded' on these, and dropping the
+            % argument silently reads the amplifier differentially.
+            obj.logEvent('configureAnalogInput', struct('channels', channels, ...
+                'rangeV', rangeV, 'singleEnded', singleEndedChannels));
         end
 
         function configureAnalogOutput(obj, channels)
@@ -236,7 +244,7 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
                     'configureAnalogInput() required first.');
             end
             nChans = numel(obj.configuredAiChannels_);
-            data = randn(nSamples, nChans) * 0.01;
+            data = obj.synthesizeFinite(nSamples, nChans);
             obj.logEvent('readAnalogInput', struct('nSamples', nSamples, 'nChans', nChans));
         end
 
@@ -375,6 +383,68 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
             end
         end
 
+        function data = peekContinuousAi(obj, range)
+            %peekContinuousAi Already-acquired AI from the running session.
+            %   data = peekContinuousAi(obj, n)        last n samples
+            %   data = peekContinuousAi(obj, [i0 i1])  that 1-based sample range
+            %
+            %   For LIVE DISPLAY ONLY. On real hardware this returns the actual
+            %   acquired samples, identical to what stopContinuousSession will
+            %   report. On this mock it re-synthesizes from the queued events, so
+            %   the NOISE REALIZATION DIFFERS between a peek and the final
+            %   record: the signal is right, the exact samples are not. Never
+            %   analyze peeked data — the authoritative record is the one
+            %   stopContinuousSession returns.
+            %
+            %   Mirrors the tfp.hardware.DAQ entry point of the same name (see
+            %   docs/UPSTREAM_TFP_PEEK.md); this repo's copy exists so the GUI
+            %   can be developed and tested mock-first.
+            if ~obj.isRunning || isempty(obj.continuousCfg_)
+                error('tfp:hardware:DAQ:notRunning', ...
+                    'peekContinuousAi called without an active continuous session.');
+            end
+            snap = obj.continuousCfg_;
+            nAi = numel(snap.aiChannels);
+            nNow = double(obj.currentSampleIndex()) - 1;   % last acquired sample
+            if nNow < 1 || nAi == 0
+                data = zeros(0, nAi);
+                return
+            end
+
+            if isscalar(range)
+                i1 = nNow;
+                i0 = max(1, nNow - double(range) + 1);
+            elseif numel(range) == 2
+                i0 = max(1, double(range(1)));
+                i1 = min(nNow, double(range(2)));
+            else
+                error('tfp:hardware:DAQ:badShape', ...
+                    'range must be a sample count or a [i0 i1] pair.');
+            end
+            if i1 < i0
+                data = zeros(0, nAi);
+                return
+            end
+
+            if isempty(obj.model_)
+                data = randn(i1 - i0 + 1, nAi) * 0.01;
+                return
+            end
+
+            % Synthesize ONLY the requested window (plus a lead-in so the
+            % passive IIRs have settled), and restore the model's stream
+            % afterwards. Both matter: synthesizing the whole session here made
+            % a block O(n^2), and every draw from the shared stream would shift
+            % the evoked responses of all later trials — the peek would change
+            % the ground truth it is supposed to be observing.
+            lead = round(0.2 * snap.sampleRate);
+            j0 = max(1, i0 - lead);
+            rngSnapshot = obj.model_.rngState();
+            restore = onCleanup(@() obj.model_.setRngState(rngSnapshot));
+            seg = obj.synthesizeWindow(snap, j0, i1);
+            data = seg((i0 - j0 + 1):end, :);
+        end
+
         function result = stopContinuousSession(obj)
             if ~obj.isRunning || isempty(obj.continuousCfg_)
                 error('tfp:hardware:DAQ:notRunning', ...
@@ -443,6 +513,144 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
     end
 
     methods (Access = private)
+        function data = synthesizeFinite(obj, nSamples, nChans)
+            %synthesizeFinite Ground-truth AI for one finite trial (DAQ volts).
+            %   The per-trial finite path (configureAnalogOutput/queueAnalogOutput/
+            %   start/readAnalogInput) is what the patching GUI's membrane test
+            %   runs on, so it has to produce a real RC response and not just
+            %   noise — otherwise patch mode cannot be developed against the mock.
+            %   Same physics as synthesizeSession, minus the multi-event session
+            %   reconstruction: one queued waveform, one window.
+            data = randn(nSamples, nChans) * 0.01;   % no model: bare noise, as before
+
+            if isempty(obj.model_)
+                return
+            end
+            scaledCol = find(obj.configuredAiChannels_ == obj.aiScaledChan_, 1);
+            if isempty(scaledCol)
+                return   % scaled output not acquired; nothing to synthesize
+            end
+
+            % Command trace in volts. The AO line holds its last written sample
+            % once the queued waveform runs out (mirrors the NI AO idle).
+            cmdVolts = zeros(nSamples, 1);
+            cellCol = find(obj.configuredAoChannels_ == obj.aoCellCmdChan_, 1);
+            if ~isempty(obj.queuedAo_) && ~isempty(cellCol)
+                w = obj.queuedAo_(:, cellCol);
+                n = min(numel(w), nSamples);
+                cmdVolts(1:n) = w(1:n);
+                if n < nSamples
+                    cmdVolts(n+1:end) = w(n);
+                end
+            end
+
+            mode = obj.clampState_.mode;
+            gain = obj.model_.gain;
+
+            % The AO idles at its last written sample between sweeps, so the
+            % cell arrives at the next sweep ALREADY at that level. Prepend a
+            % settling segment at the carried-over level and trim it, otherwise
+            % every sweep opens with a spurious capacitive transient from 0 to
+            % holding -- which would swamp the trace and make the holding
+            % readout (mean of the first samples) meaningless.
+            nSettle = max(1, round(0.05 * obj.sampleRate));
+            cmdFull = [repmat(obj.lastFiniteCmdVolts_, nSettle, 1); cmdVolts];
+
+            % As in synthesizeSession: the amplifier supplies holding, the AO
+            % supplies deviations from it.
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdFull, mode, gain) ...
+                + obj.clampState_.holdingMv;
+            aiFull  = obj.model_.synthesizePassive(cmdCell, mode, obj.sampleRate);
+            aiCell  = aiFull(nSettle + 1:end);
+            aiCell  = aiCell + obj.model_.drawNoise(nSamples, mode);
+            data(:, scaledCol) = sem.util.Units.scaledCellToDaqVolts(aiCell, mode, gain);
+
+            obj.lastFiniteCmdVolts_ = cmdVolts(end);
+        end
+
+        function seg = synthesizeWindow(obj, snap, j0, j1)
+            %synthesizeWindow AI over sample range [j0, j1] only (DAQ volts).
+            %   Same physics as synthesizeSession over a slice, so a live peek
+            %   costs O(window) rather than O(session). Callers must snapshot and
+            %   restore the model's RNG around this (see peekContinuousAi).
+            fs = snap.sampleRate;
+            mode = obj.sessionClampMode_;
+            gain = obj.model_.gain;
+            nAi = numel(snap.aiChannels);
+            n = j1 - j0 + 1;
+            seg = randn(n, nAi) * 0.005;
+
+            scaledCol = find(snap.aiChannels == obj.aiScaledChan_, 1);
+            if isempty(scaledCol) || n <= 0
+                return
+            end
+            cellCol = find(snap.aoChannels == obj.aoCellCmdChan_, 1);
+
+            % Command trace across the window. Events before it only matter for
+            % the level the AO line is holding when the window opens.
+            cmdVolts = zeros(n, 1);
+            lastVal = 0;
+            cursor = j0;
+            for e = 1:numel(obj.events_)
+                ev = obj.events_(e);
+                if isempty(cellCol)
+                    w = zeros(size(ev.samples, 1), 1);
+                else
+                    w = ev.samples(:, cellCol);
+                end
+                i0e = max(1, round(ev.onset));
+                i1e = i0e + numel(w) - 1;
+                if i1e < j0
+                    lastVal = w(end);          % entirely before: just carry the level
+                    continue
+                end
+                if i0e > j1
+                    break
+                end
+                a = max(i0e, j0);
+                b = min(i1e, j1);
+                if a > cursor
+                    cmdVolts((cursor - j0 + 1):(a - j0 - 1 + 1)) = lastVal;
+                end
+                cmdVolts((a - j0 + 1):(b - j0 + 1)) = w((a - i0e + 1):(b - i0e + 1));
+                lastVal = w(end);
+                cursor = b + 1;
+            end
+            if cursor <= j1
+                cmdVolts((cursor - j0 + 1):end) = lastVal;
+            end
+
+            % The AO carries DEVIATIONS; the amplifier applies holding on top.
+            % Modelling that here is what makes the mock match a rig where the
+            % Commander holds the cell (see sem.protocol.sweepWaveform).
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain) ...
+                + obj.clampState_.holdingMv;
+            aiCell = obj.model_.synthesizePassive(cmdCell, mode, fs);
+
+            % Evoked responses whose window overlaps this one.
+            nWin = round(0.25 * fs);
+            for e = 1:numel(obj.events_)
+                ev = obj.events_(e);
+                if isempty(ev.stim) || ~ismember(ev.stim.kind, ...
+                        {'ensemble', 'single', 'blank', 'direct'})
+                    continue
+                end
+                i0e = max(1, round(ev.onset));
+                if i0e > j1 || (i0e + nWin - 1) < j0
+                    continue
+                end
+                clampState = struct('mode', ev.clampMode, 'holdingMv', ev.holdingMv);
+                snip = obj.model_.synthesizeEvoked(ev.stim, clampState, fs, nWin);
+                a = max(i0e, j0);
+                b = min(i0e + nWin - 1, j1);
+                aiCell((a - j0 + 1):(b - j0 + 1)) = ...
+                    aiCell((a - j0 + 1):(b - j0 + 1)) + snip((a - i0e + 1):(b - i0e + 1));
+            end
+
+            aiCell = aiCell + obj.model_.drawNoise(n, mode);
+            seg(:, scaledCol) = sem.util.Units.scaledCellToDaqVolts(aiCell, mode, gain);
+        end
+
         function aiData = synthesizeSession(obj, snap, nS)
             %synthesizeSession Ground-truth AI for the whole session (DAQ volts).
             fs = snap.sampleRate;
@@ -482,7 +690,11 @@ classdef MockEphysDAQ < tfp.hardware.DAQ
                 cmdVolts(cursor:nS) = lastVal;
             end
 
-            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain);
+            % The AO carries DEVIATIONS; the amplifier applies holding on top.
+            % Modelling that here is what makes the mock match a rig where the
+            % Commander holds the cell (see sem.protocol.sweepWaveform).
+            cmdCell = sem.util.Units.commandDaqVoltsToCell(cmdVolts, mode, gain) ...
+                + obj.clampState_.holdingMv;
             aiCell = obj.model_.synthesizePassive(cmdCell, mode, fs);
 
             % Evoked responses for optogenetic stim events.
